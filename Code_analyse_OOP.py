@@ -162,7 +162,7 @@ class DataCharger:
         print("N.B. : La liste des années et/ou des codes d'agence peut être modifiée à l'aide de la méthode 'change_agence_year_choice'.")
 
     def load_csv(self):
-        self.dataset = pd.read_csv(self, filepath, index_col = 0)
+        self.dataset = pd.read_csv(self, self.filepath, index_col = 0)
         self.dataset = self.dataset.sort_index()
         self.dataset = self.dataset.sort_values("date_heure_operation")
         self.dataset.index = self.dataset.index.astype(int)
