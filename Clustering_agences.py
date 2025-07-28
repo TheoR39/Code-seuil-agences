@@ -20,7 +20,7 @@ class Clustering_agences:
     # On suppose également que 'code_agence' est mis en index
     # On suppose enfin que complete_data a été nettoyé au préalable avec PreprocessingRawData
     # Dans un premier temps, on a besoin de créer un nouveau DataFrame avec les features retenue
-    def __init__(self, new_filepath, filepath = None):
+    def __init__(self, new_filepath : str, filepath : str, already_created : Optional[bool] = False):
         self.filepath = filepath  # Filepath de la donnée complète
         self.new_filepath = new_filepath
         self.data = None  # On commence par créer un DataFrame vide
@@ -28,6 +28,7 @@ class Clustering_agences:
         self.best_nb_k_means = None
         self.pca_object = None
         self.applied_pca = None
+        self.already_created = already_created
 
     def remplissage_data(self):  # Devrait permettre de créer la donnée nécessaire à passer aux algos
         dataset = DataCharger(self.filepath)
@@ -61,8 +62,24 @@ class Clustering_agences:
           data_scaled = scaler.fit_transform(self.data)
           self.data_scaled = pd.DataFrame(data_scaled, columns = self.data.columns, index = self.data.index)
 
+
     def remove_feature(self, column):
         self.data = self.data.drop(columns = column)  # Si une feature est inutile
+
+    def remove_or_not(self):  # A modifier impérativement...
+        # Pour décider s'il faut enlever des features ou pas (suivant la heatmap)
+        assert self.data is not None
+        remove = bool(input("Entrez 'True' si vous voulez retirer des variable, 'False' sinon"))
+        if not isinstance(remove, bool):
+            raise ValueError("La valeur rentrée doit être booléenne")
+        if remove: 
+            input_user = input("Entrez la liste des variables à supprimer avant clustering: ")
+            retiring = [str(elem.strip()) for elem in input_user.split(',')]
+            if not all(retired in self.data.columns for retired in retiring):
+                raise ValueError("Certaines colonnes ne sont pas présentes dans self.data")
+            else:
+                self.data.drop(columns = retiring, inplace = True)
+        
 
     def apply_PCA(self, n_components : Optional[int] = None, var_kept : Optional[float] = None):
         assert self.data_scaled is not None, "Les données doivent impérativement être standardisées"
@@ -283,7 +300,18 @@ class Clustering_agences:
 # Agrégation des méthodes de clustering:
 
     def agreg_clustering(self):  # A compléter pour obtenir une méthode d'analyse
-        pass
+        if not self.already_created:
+            self.remplissage_data()
+            self.save_data(self.new_filepath)
+            self.load_data()
+        else:
+            self.load_data()
+        self.heatmap_features()
+        self.remove_or_not()
+        self.scaling_data()
+
+    
+
 
 
 

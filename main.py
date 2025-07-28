@@ -35,10 +35,10 @@ def main():
 
     if args.prelim_analysis: # A compléter pour un peu plus tard
         print(f"Lancement d'une analyse statistique exploratoire pour l'(les) agence(s) {args.agences} sur l'(les) années {args.years}")
-        data = DataCharger(filepath = clean_filepath, code = args.agences, annee = args.years)
-        data.analyse_preliminaire_data()
-        print("Analyse descriptive terminée!")
-
+        choice = DataCharger(filepath = clean_filepath, code = args.agences, annee = args.years)
+        data = BasicStats(choice)
+        data.preparer_donnees() # Doit renvoyer l'analyse descriptive complète
+        
     if args.clustering:
         pass
 

@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 import pandas as pd
-from datetime import datetime
+# from datetime import datetime
 from typing import Optional, List
 
 
@@ -12,12 +12,29 @@ from typing import Optional, List
 class PreprocessingRawData:
 
     def __init__(self, filepath : Optional[List[str]] = None, newfilepath : Optional[str] = None, aggregate: Optional[bool] = False):
-        self.filepath = filepath
+        '''Initialisation des paramètres et vérification des types des variables passées en argument du constructeur'''
+
+        # Vérification des types des variables:
+        if filepath is not None:
+            if not isinstance(filepath,list) or not all(isinstance(fp,str) for fp in filepath):
+                raise ValueError("Le paramètre 'filepath' fourni n'est pas correct")
+        for fp in filepath:
+            if not os.path.isfile(fp):
+                print(f"Avertissement: le fichier {fp} n'existe pas.")
+        if newfilepath is not None and not isinstance(newfilepath, str):
+            raise ValueError("Le paramètre 'newfilepath' n'est pas correct")
+        if not isinstance(aggregate,bool):
+            raise ValueError("Le paramètre 'aggregate' n'est pas correct")
+        # Initialisation des attributs:
+        self.filepath = filepath         
         self.newfilepath = newfilepath
         self.data = None
         self.aggregate = aggregate
 
-    def load_raw_csv(self):
+
+    def load_raw_csv(self): # A compléter...
+        '''Chargement des données brutes à l'aide d'une liste de chemin d'accès et concaténation du résultat'''
+
         if self.filepath is None:
             raise ValueError("Aucun chemin de fichier fourni...")
         elif isinstance(self.filepath, str):
@@ -36,44 +53,115 @@ class PreprocessingRawData:
         print("Visualisation des données après concaténation :")
         print(self.data.head(10))
 
+
     def describe_data(self):
+        '''Simple description des données avec .describe()'''
+
+        if self.data is None:   # Vérif sur self.data
+            raise ValueError("self.data doit d'abord être initialisé")
         print("Description générale des données :")
         print(self.data.describe())
 
-    def info_data(self):
-        print("Infos importantes sur les données :")
-        print(self.data.info())
 
-    def visu_data(self):
+    def info_data(self):
+        '''Simple description des données avec .info()'''
+ 
+        if self.data is None:   # Vérif sur self.data
+            raise ValueError("self.data doit d'abord être initialisé")
+        print("Infos importantes sur les données :")
+        print(self.data.info()) 
+
+
+    def visu_data(self, quant : Optional[int] = 8):
+        '''Visualisation des données avec .head()'''
+
+        if self.data is None:
+            raise ValueError("self.data doit d'abord être initialisé")
+        if not isinstance(quant, int) or quant <=0:
+            raise ValueError("La quantité demandée n'est pas entière ou négative")
         print("Visualisation des données :")
-        print(self.data.head())
+        print(self.data.head(quant))
+
 
     def remove_duplicates(self):
+        '''Retrait des doublons présents dans le dataset contenu dans self.data avec .drop_duplicates()'''
+
+        if self.data is None:
+            raise ValueError("self.data doit d'abord être initialisé")
         print("Nombre d'observations avec doublons :", self.data.shape[0])
         self.data.drop_duplicates(keep = 'first', inplace = True)
         print("Nombre d'observations après nettoyage des doublons :", self.data.shape[0])
+        # Vérification:
+        nb_restants = self.data.duplicated().sum()
+        if nb_restants != 0:
+            print(f"Il reste encore {nb_restants} de doublons")
+        print("Tous les doublons ont été éliminés")
+
 
     def time_format(self):
+        '''Création de la colonne 'date_heure_operation' en Datetime (pour filtrer sur les dates)'''
+
+        # On retire les observations manquantes:
+        if self.data is None:
+            raise ValueError("self.data doit d'abord être initialisé")
+        nb_avant = self.data.shape[0]
         self.data = self.data.dropna(subset = ["date_operation"])
+        nb_apres = self.data.shape[0]
+        print(f"Suppression de {nb_avant - nb_apres} observations à cause de dates manquantes")
+        # Vérification sur les colonnes:
+        required_cols = {'date_operation', 'heure_operation'}
+        missing_cols = required_cols - set(self.data.columns)
+        if missing_cols:
+            raise ValueError(f"Les colonnes suivantes ne sont pas présentes dans self.data :c {missing_cols}")
+        # Conversion et vérification:
         self.data["date_operation"]=  pd.to_datetime(self.data["date_operation"]).dt.normalize()
         self.data["heure_operation"] = pd.to_timedelta(self.data["heure_operation"].astype('str') + ':00')
         self.data["date_heure_operation"] = self.data["heure_operation"] + self.data["date_operation"]
+        if not pd.api.types.is_datetime64_any_dtype(self.data["date_heure_operation"]):
+            raise TypeError("'date_heure_operation n'est pas un datetime")
+        else:
+            print("La colonne 'date_heure_operation' est bien de type datetime")
+        # Trie sur la date et visualisation:
         self.data = self.data.sort_values("date_heure_operation")
-        print("Visualisation des données après reformatage des dates (regarder la nouvelle colonne date_heure_operation): ")
+        print("Visualisation des données après reformatage des dates (regarder la nouvelle colonne 'date_heure_operation'): ")
         print(self.data.head())
 
+
     def algebrisation_montants(self):
+        '''Algébrise les montants des opérations: + pour un dépôt et - pour un retrait'''
+        
+        # Vérifications préliminaires:
+        assert self.data is not None, "Il faut initialiser self.data"
+        required_cols = {"montant_operation", "sens_operation"}
+        missing_cols = required_cols - set(self.data.columns)
+        if missing_cols:
+            raise ValueError(f"Les colonnes suivantes sont manquantes: {missing_cols}")
+        # Algébrisation des montants:
         self.data.loc[self.data["sens_operation"] == 'D', "montant_operation"] *= -1
+        # Abandon de la colonne 'sens_operation' devenue obsolète:
         self.data = self.data.drop(columns = ["sens_operation"])
+        # Visualisation après transformation:
         print("Visualisation des données après algébrisation des montants (regarder la colonne montant_operation): ")
         print(self.data.head())
 
+
     def check_currency(self):
+        '''Retourne les observations (et les dates correspondantes) dont la devise n'est pas en MAD'''
+        
+        # Vérifications préliminaires:
+        if self.data is None:
+            raise ValueError("self.data doit d'abord être initialisé")
+        required_cols = {"devise"}
+        missing_cols = required_cols - set(self.data.columns)
+        if missing_cols:
+            raise ValueError(f"Les colonnes suivantes sont manquantes: {missing_cols}")
+        # Décompte du nombre d'opérations incorrectes:
         print(self.data["devise"].value_counts(dropna=False))
-        if not (self.data["devise"] != 'MAD').any():
+        if not (self.data["devise"] != 'MAD').all():
             print("Toutes les observations sont bien en MAD")
             return False
         else:
+            # Print à l'utilisateur les opérations problématiques et leurs dates
             obs_non_MAD = self.data[self.data["devise"] != 'MAD']
             print("N.B.: S'il y a des observations dont la devise n'est pas en MAD, il faut trouver le taux de change de la journée")
             print("Il faut ensuite convertir à l'aide de la méthode 'change_currency'")
@@ -99,13 +187,27 @@ class PreprocessingRawData:
         print("Conversion des devises effectuée")
         print("Vérification d'autres devises restantes :", (self.data["devise"] != 'MAD').any())
 
-    def filtre_etat_operation(self):
-        self.data = self.data[self.data["etat_operation"] == 2]
+
+    def filtre_etat_origine_operation(self):
+        '''Filtre sur les opérations en agence (OA) et sur les opérations terminées (2)'''
+
+        # Vérifications preliminaires:
+        if self.data is None:
+            raise ValueError("self.data doit d'abord être initialisé")
+        print("Nombre d'observations avant filtrage: ", self.data.shape[0])
+        # Filtrage sur 'etat_origine_operation':
+        self.data = self.data[self.data["etat_origine_operation"] == 2]
         print("Nombre d'observations après filtrage sur la colonne 'etat_operation' :", self.data.shape[0])
+        # Filtrage sur 'etat_origine_operation':
         self.data = self.data[self.data["application_origine_operation"] == 'OA']
         print("Nombre d'observations après filtrage sur la colonne 'application_origine_operation' :", self.data.shape[0])
 
+
     def filtre_type_operation(self):
+        '''Filtrage sur le type d'opération'''
+
+        if self.data is None:
+            raise ValueError("self.data doit d'abord être initialisé")
         vals_libelle = self.data["libelle_long_operation"].dropna().unique()
         categ_retraits = [valeur for valeur in vals_libelle if str(valeur).startswith("RETRAIT")]
         categ_versements = [valeur for valeur in vals_libelle if str(valeur).startswith("VERSEMENT")]
@@ -116,6 +218,10 @@ class PreprocessingRawData:
         print("Nombre d'observations restantes :", self.data.shape[0])
 
     def remove_columns(self):
+        '''Abandon des colonnes inutilisées'''
+
+        if self.data is None:
+            raise ValueError("self.data doit d'abord être initialisé")
         print("Nombre de colonnes avant traitement :", self.data.shape[1])
         self.data = self.data.drop(columns = ['identifiant_compte', 'reference_operation', 'code_marche', 'etat_operation', 
         'code_famille_operation', 'code_type_operation', 'application_origine_operation', 'motif_operation', 'devise', 'numero_caisse',
@@ -136,6 +242,8 @@ class PreprocessingRawData:
         print("Données nettoyées enregistrées au format csv")
 
     def preprocessing(self):
+        '''Agglomère les différentes fonctions pour un preprocessing global (et complet)'''
+
         self.load_raw_csv()
         self.describe_data()
         self.info_data()
@@ -143,7 +251,7 @@ class PreprocessingRawData:
         self.remove_duplicates()
         self.time_format()
         self.algebrisation_montants()
-        self.filtre_etat_operation()
+        self.filtre_etat_origine_operation()
         self.filtre_type_operation()
         if self.check_currency():
             saisie = input("Insérez ici la liste des valeurs des taux de change appropriés pour les dates et les devises données, séparés par une virgule :")
@@ -348,7 +456,7 @@ class DataCharger:
 
 class BasicStats:  
 
-    def __init__(self, class_data):
+    def __init__(self, class_data : DataCharger):
         self.object = class_data  
         self.mois_possibles = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin", "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
         self.month = None
@@ -1010,4 +1118,3 @@ class BasicStats:
     # Rajouter des vérifications (dans init / load_data / load_raw_csv)
     # Rajouter des docstrings
     # Utiliser logging au lieu de print (il reste encore du boulot...)
-    # Et pb avec les semaines.
