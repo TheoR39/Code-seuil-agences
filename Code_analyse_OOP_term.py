@@ -1,3 +1,4 @@
+import os
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
@@ -10,10 +11,11 @@ from typing import Optional, List
 
 class PreprocessingRawData:
 
-    def __init__(self, filepath : Optional[List[str]] = None, newfilepath : Optional[str] = None):
+    def __init__(self, filepath : Optional[List[str]] = None, newfilepath : Optional[str] = None, aggregate: Optional[bool] = False):
         self.filepath = filepath
         self.newfilepath = newfilepath
         self.data = None
+        self.aggregate = aggregate
 
     def load_raw_csv(self):
         if self.filepath is None:
@@ -28,7 +30,7 @@ class PreprocessingRawData:
             df = df.sort_index()
             list_dfs.append(df)
             print(f"Données chargées depuis {filepath}")
-        self.data = pd.concat(list_dfs, ignore_index = False)
+        self.data = pd.concat(list_dfs, axis = 0)
         self.data = self.data.sort_index()
         print(f"Concaténation terminée, pour un nombre total d'observations de {self.data.shape[0]}")
         print("Visualisation des données après concaténation :")
@@ -53,7 +55,7 @@ class PreprocessingRawData:
 
     def time_format(self):
         self.data = self.data.dropna(subset = ["date_operation"])
-        self.data["date_operation"]=  pd.to_datetime(self.data["date_heure_operation"]).dt.normalize()
+        self.data["date_operation"]=  pd.to_datetime(self.data["date_operation"]).dt.normalize()
         self.data["heure_operation"] = pd.to_timedelta(self.data["heure_operation"].astype('str') + ':00')
         self.data["date_heure_operation"] = self.data["heure_operation"] + self.data["date_operation"]
         self.data = self.data.sort_values("date_heure_operation")
@@ -95,7 +97,7 @@ class PreprocessingRawData:
             self.data.loc[mask, "montant_operation"] *= taux[i]
             self.data.loc[mask, "devise"] = "MAD"
         print("Conversion des devises effectuée")
-        print("Vérification d'autres devises restantes :", (self.data["devise"] != 'MAD'.any()))
+        print("Vérification d'autres devises restantes :", (self.data["devise"] != 'MAD').any())
 
     def filtre_etat_operation(self):
         self.data = self.data[self.data["etat_operation"] == 2]
@@ -123,7 +125,14 @@ class PreprocessingRawData:
         print(self.data.info())
 
     def save_cleaned_data(self, newfilepath : str):
-        self.data.to_csv(newfilepath, index = True, encoding = 'utf-8')
+        if self.aggregate and os.path.exists(newfilepath):
+            complete = pd.read_csv(filepath = newfilepath, index_col = 0)
+            to_save = pd.concat([complete,self.data], ignore_index = False)
+        else:
+            to_save = self.data
+        to_save = to_save.sort_index()
+        to_save = to_save.sort_values("date_heure_operation")
+        to_save.to_csv(newfilepath, index = True, encoding = 'utf-8')
         print("Données nettoyées enregistrées au format csv")
 
     def preprocessing(self):
@@ -139,14 +148,12 @@ class PreprocessingRawData:
         if self.check_currency():
             saisie = input("Insérez ici la liste des valeurs des taux de change appropriés pour les dates et les devises données, séparés par une virgule :")
             taux =  [float(elem.strip()) for elem in saisie.split(',')]
-            self.change_currency()
+            self.change_currency(taux)
         self.remove_columns()
         self.visu_data()
         if not self.newfilepath:
             raise ValueError("Aucun chemin de sauvegarde spécifié")
         self.save_cleaned_data(self.newfilepath)
-
-
 
 
 
@@ -320,7 +327,7 @@ class DataCharger:
         else:
             print("Aucune donnée affectée à self.data_years")
 
-    def preparer_donneees(self):
+    def preparer_donnees(self):
         self.load_csv()
         self.verif_vides()
         self.verif_encodage()
@@ -347,7 +354,7 @@ class BasicStats:
         self.month = None
         self.saisons = ["Printemps", "Eté", "Automne", "Hiver"]
         self.semestres = ["1er semestre", "2nd semestre"]
-        self.semaines = [f"Semaine {i}" for i in range(1,self.data["date_heure_operation"].dt.isocalendar().week.max() + 1)]
+        # self.semaines = [f"Semaine {i}" for i in range(1,self.data["date_heure_operation"].dt.isocalendar().week.max() + 1)]
         self.trimestres = ["1er trimestre", "2ème trimestre", "3ème semestre", "4ème semestre"]
         self.type_periode = {"month": self.mois_possibles, "season": self.saisons,
                              "semester": self.semestres, "quarter": self.trimestres,
@@ -368,6 +375,11 @@ class BasicStats:
         annees = self.data["date_heure_operation"].dt.year.unique()
         assert len(annees) == 1, f"Le jeu de données contient plusieurs années au lieu d'en contenir une seule {annees}"
         return annees[0]
+    
+    def semaines_data(self):
+        assert self.data is not None, "Il faut d'abord initialiser self.data"
+        self.semaines = [f"Semaine {i}" for i in range(1,self.data["date_heure_operation"].dt.isocalendar().week.max() + 1)]
+        # Pb: le calcul des semaines s'appuie sur self.data
 
 
 
@@ -439,14 +451,14 @@ class BasicStats:
 
     def vals_seuil_montants(self):  # On va s'intéresser aux caractéristiques de la moyenne
         montant = self.montants_obs_jour()
-        moy_retraits_jour = montant["retraits"].mean()
-        median_retraits_jour = montant["retraits"].median()  # Médiane de la moyenne
-        std_retraits_jour = montant["retraits"].std()
+        moy_retraits_jour = montant["moy_retraits"].mean()
+        median_retraits_jour = montant["moy_retraits"].median()  # Médiane de la moyenne
+        std_retraits_jour = montant["moy_retraits"].std()
         max_retrait = montant["max_retrait"]
         min_retrait = montant["min_retrait"]
-        moy_versements_jour = montant["versements"].mean()
-        median_versements_jour = montant["versements"].median()
-        std_versements_jour = montant["versements"].std()
+        moy_versements_jour = montant["moy_versements"].mean()
+        median_versements_jour = montant["moy_versements"].median()
+        std_versements_jour = montant["moy_versements"].std()
         max_versement = montant["max_versement"]
         min_versement = montant["min_versement"]
         print("Plus grand retrait effectué: ", max_retrait)
@@ -487,6 +499,7 @@ class BasicStats:
     def nb_clients_annee(self):
         nb_clients = self.data["identifiant_client"].nunique()
         print(f"Nombre de clients pour l'agence {self.agence} à l'année {self.year}: ", nb_clients)
+        return nb_clients
 
 
 
@@ -534,30 +547,34 @@ class BasicStats:
         versements = self.data[self.data["crédit"] != 0]["crédit"]
         médiane = versements.quantile(0.5)
         quantile_90 = versements.quantile(0.90)
+        quantile_95 = versements.quantile(0.95)
         quantile_98 = versements.quantile(0.98)
         quantile_99 = versements.quantile(0.99)
         quantile_999 = versements.quantile(0.999)
         print("Médiane des versements: ", médiane)
         print("Quantile 0.90 des versements: ", quantile_90)
+        print("Quantile 0.95 des versements: ", quantile_95)
         print("Quantile 0.98 des versements: ", quantile_98)
         print("Quantile 0.99 des versements: ", quantile_99)
         print("Quantile 0.999 des versements: ", quantile_999)
-        dict_quantile_versements = {"quant_50": médiane, "quant_90": quantile_90, "quant_98": quantile_98, "quant_99": quantile_99, "quant_999": quantile_999}
+        dict_quantile_versements = {"quant_50": médiane, "quant_90": quantile_90, "quant_95": quantile_95, "quant_98": quantile_98, "quant_99": quantile_99, "quant_999": quantile_999}
         return dict_quantile_versements
         
     def quantiles_retraits(self):
         retraits = self.data[self.data["débit"] != 0]["débit"]
         médiane = retraits.quantile(0.5)
         quantile_90 = retraits.quantile(0.90)
+        quantile_95 = retraits.quantile(0.95)
         quantile_98 = retraits.quantile(0.98)
         quantile_99 = retraits.quantile(0.99)
         quantile_999 = retraits.quantile(0.999)
         print("Médiane des retraits: ", médiane)
         print("Quantile 0.90 des retraits: ", quantile_90)
+        print("Quantile 0.95 des retraits: ", quantile_95)
         print("Quantile 0.98 des retraits: ", quantile_98)
         print("Quantile 0.99 des retraits: ", quantile_99)
         print("Quantile 0.999 des retraits: ", quantile_999)
-        dict_quantile_retraits = {"quant_50": médiane, "quant_90": quantile_90, "quant_98": quantile_98, "quant_99": quantile_99, "quant_999": quantile_999}
+        dict_quantile_retraits = {"quant_50": médiane, "quant_90": quantile_90, "quant_95": quantile_95, "quant_98": quantile_98, "quant_99": quantile_99, "quant_999": quantile_999}
         return dict_quantile_retraits
     
     def quantiles_flux(self):
@@ -978,7 +995,7 @@ class BasicStats:
         dict_agence["Std_versements_j"] = result_quant["std_versements_j"]
         dict_agence["Std_retraits_j"] = result_quant["std_retraits_j"]
         dict_agence[f"Nb_clients_{self.year}"] = self.nb_clients_annee()
-        dict_agence["Nb_moy_transactions_j"] = result_nb["obs_j"]
+        dict_agence["Nb_moy_transactions_j"] = result_nb["obs_j"].mean()
         dict_agence["Nb_retraits_sup_quant_95"] = result_quant_95[0]
         dict_agence["Nb_retraits_sup_quant_99"] = result_quant_99[0]
         dict_agence["Freq_retraits_sup_quant_95"] = result_quant_95[0]
@@ -990,3 +1007,7 @@ class BasicStats:
     
     # Pb: On conserve beaucoup de features. Il faudra surement faire un tri avant de clusteriser
     # ou appliquer une méthode de réduction de dimension (type PCA...).
+    # Rajouter des vérifications (dans init / load_data / load_raw_csv)
+    # Rajouter des docstrings
+    # Utiliser logging au lieu de print (il reste encore du boulot...)
+    # Et pb avec les semaines.
