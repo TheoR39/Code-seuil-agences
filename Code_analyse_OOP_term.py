@@ -10,8 +10,9 @@ from typing import Optional, List
 
 class PreprocessingRawData:
 
-    def __init__(self, filepath : Optional[List[str]] = None):
+    def __init__(self, filepath : Optional[List[str]] = None, newfilepath : Optional[str] = None):
         self.filepath = filepath
+        self.newfilepath = newfilepath
         self.data = None
 
     def load_raw_csv(self):
@@ -99,6 +100,8 @@ class PreprocessingRawData:
     def filtre_etat_operation(self):
         self.data = self.data[self.data["etat_operation"] == 2]
         print("Nombre d'observations après filtrage sur la colonne 'etat_operation' :", self.data.shape[0])
+        self.data = self.data[self.data["application_origine_operation"] == 'OA']
+        print("Nombre d'observations après filtrage sur la colonne 'application_origine_operation' :", self.data.shape[0])
 
     def filtre_type_operation(self):
         vals_libelle = self.data["libelle_long_operation"].dropna().unique()
@@ -124,7 +127,7 @@ class PreprocessingRawData:
         print("Données nettoyées enregistrées au format csv")
 
     def preprocessing(self):
-        self.load_raw_data()
+        self.load_raw_csv()
         self.describe_data()
         self.info_data()
         self.visu_data()
@@ -139,8 +142,9 @@ class PreprocessingRawData:
             self.change_currency()
         self.remove_columns()
         self.visu_data()
-        newfilepath = input("Insérez le nouveau chemin d'accès de la donnée nettoyée (en csv) :")
-        self.save_cleaned_data(newfilepath)
+        if not self.newfilepath:
+            raise ValueError("Aucun chemin de sauvegarde spécifié")
+        self.save_cleaned_data(self.newfilepath)
 
 
 
