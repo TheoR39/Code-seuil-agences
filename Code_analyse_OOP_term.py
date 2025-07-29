@@ -271,7 +271,7 @@ class PreprocessingRawData:
 
 class DataCharger:
 
-    def __init__(self, filepath = None, code = None, annee = None, choice = None):
+    def __init__(self, filepath : str = None, code : list[int] = None, annee: list[int]= None, choice = None):
         self.filepath = filepath
         self.year = annee
         self.code = code
@@ -284,6 +284,8 @@ class DataCharger:
         print("N.B. : La liste des années et/ou des codes d'agence peut être modifiée à l'aide de la méthode 'change_agence_year_choice'.")
 
     def load_csv(self):
+        '''Chargement des données complètes (attribuées à self.dataset)'''
+
         self.dataset = pd.read_csv(self.filepath, index_col = 0)
         self.dataset = self.dataset.sort_index()
         self.dataset = self.dataset.sort_values("date_heure_operation")
@@ -293,6 +295,8 @@ class DataCharger:
         print(self.dataset.head(10))
 
     def verif_vides(self):
+        '''Enlève les observations avec des valeurs vides'''
+
         for column in self.dataset.columns:
             if self.dataset[column].isna().any():
                 print(f"La colonne {column} contient des valeurs manquantes")
@@ -301,6 +305,8 @@ class DataCharger:
                 print(f'Aucune valeur manquante dans la colonne {column}')
 
     def verif_encodage(self):
+        '''Vérification de l'encodage des colonnes importantes (en particulier pour les dates)'''
+
         self.dataset["date_heure_operation"] = pd.to_datetime(self.dataset["date_heure_operation"])
         self.dataset.index = self.dataset.index.astype(int)
         self.dataset["libelle_long_operation"] = self.dataset["libelle_long_operation"].astype('string')
@@ -308,11 +314,15 @@ class DataCharger:
         self.dataset["identifiant_operation"] = self.dataset["identifiant_operation"].astype('string')
         print(self.dataset.info())
 
+
     def completion_data(self):
+        '''Ajout de colonnes nécessaires au traitement des données (notamment les flux)'''
+
         self.dataset["jour"] = self.dataset["date_heure_operation"].dt.date
         self.dataset["crédit"] = self.dataset["montant_operation"].apply(lambda x: x if x>0 else 0)
         self.dataset["débit"] = self.dataset["montant_operation"].apply(lambda x: -x if x<0 else 0)
         self.dataset["flux_net"] = self.dataset.groupby("jour")["montant_operation"].cumsum()
+
 
     def change_assignation(self, agence : Optional[List[int]] = None, annee : Optional[List[int]] = None, choice : Optional[int] = None):
         if agence:
@@ -485,8 +495,10 @@ class BasicStats:
         return annees[0]
     
     def semaines_data(self):
-        assert self.data is not None, "Il faut d'abord initialiser self.data"
-        self.semaines = [f"Semaine {i}" for i in range(1,self.data["date_heure_operation"].dt.isocalendar().week.max() + 1)]
+        if self.data is None:
+            raise ValueError("Il faut d'abord commencer par initialiser self.data")
+        else:
+            self.semaines = [f"Semaine {i}" for i in range(1,self.data["date_heure_operation"].dt.isocalendar().week.max() + 1)]
         # Pb: le calcul des semaines s'appuie sur self.data
 
 
@@ -1118,3 +1130,4 @@ class BasicStats:
     # Rajouter des vérifications (dans init / load_data / load_raw_csv)
     # Rajouter des docstrings
     # Utiliser logging au lieu de print (il reste encore du boulot...)
+    # Vérifier l'encodage des semaines (une fois que self.data est défini)
