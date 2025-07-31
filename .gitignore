@@ -4,8 +4,8 @@
 # === Fichier HTML généré pour la visualisation ===
 Templates/
 
-# === Fichiers Jupyter inutiles pour l'instant ===
-Essai_Monte_Carlo_Claude.ipynb
-Extraction.ipynb
+# === Dossiers à ignorer  ===
+/Notebooks Jupyter/
+/Data/
 
 .vscode
