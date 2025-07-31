@@ -18,6 +18,8 @@ class PreprocessingRawData:
         if filepath is not None:
             if not isinstance(filepath,list) or not all(isinstance(fp,str) for fp in filepath):
                 raise ValueError("Le paramètre 'filepath' fourni n'est pas correct")
+        if filepath is None:
+            raise ValueError("Le paramètre 'filepath' est manquant")
         for fp in filepath:
             if not os.path.isfile(fp):
                 print(f"Avertissement: le fichier {fp} n'existe pas.")
@@ -29,7 +31,7 @@ class PreprocessingRawData:
         self.filepath = filepath         
         self.newfilepath = newfilepath
         self.data = None
-        self.aggregate = aggregate
+        self.aggregate = aggregate  # Savoir s'il faut nettoyer ou pas (à vérifier dans le main)
 
 
     def load_raw_csv(self): # A compléter...
@@ -53,21 +55,37 @@ class PreprocessingRawData:
         print("Visualisation des données après concaténation :")
         print(self.data.head(10))
 
+    def check_not_None(self):
+        '''Fonction pour vérifier que les données sont bien chargées'''
+
+        if self.data is None:
+            raise ValueError("self.data doit d'abord être initialisé")
+        
+    
+    def check_missing_columns(self, columns: list[str]):
+        '''Vérifie que les colonnes en argument sont bien présentes dans le dataset self.data'''
+
+        if not isinstance(columns,list) or not all(isinstance(col,str) for col in columns):
+            raise TypeError("L'argument 'columns' doit être une liste de chaînes de caractères")
+        if not hasattr(self,'data') or self.data is None:
+            raise AttributeError("L'attribut 'dataset' est manquant ou vide")
+        missing = set(columns) - set(self.data.columns)
+        if missing:
+            raise ValueError(f"Les colonnes suivantes sont absentes de self.data: {missing}")
+
 
     def describe_data(self):
         '''Simple description des données avec .describe()'''
 
-        if self.data is None:   # Vérif sur self.data
-            raise ValueError("self.data doit d'abord être initialisé")
+        self.check_not_None()
         print("Description générale des données :")
         print(self.data.describe())
 
 
     def info_data(self):
         '''Simple description des données avec .info()'''
- 
-        if self.data is None:   # Vérif sur self.data
-            raise ValueError("self.data doit d'abord être initialisé")
+
+        self.check_not_None()
         print("Infos importantes sur les données :")
         print(self.data.info()) 
 
@@ -75,8 +93,7 @@ class PreprocessingRawData:
     def visu_data(self, quant : Optional[int] = 8):
         '''Visualisation des données avec .head()'''
 
-        if self.data is None:
-            raise ValueError("self.data doit d'abord être initialisé")
+        self.check_not_None()
         if not isinstance(quant, int) or quant <=0:
             raise ValueError("La quantité demandée n'est pas entière ou négative")
         print("Visualisation des données :")
@@ -86,8 +103,7 @@ class PreprocessingRawData:
     def remove_duplicates(self):
         '''Retrait des doublons présents dans le dataset contenu dans self.data avec .drop_duplicates()'''
 
-        if self.data is None:
-            raise ValueError("self.data doit d'abord être initialisé")
+        self.check_not_None()
         print("Nombre d'observations avec doublons :", self.data.shape[0])
         self.data.drop_duplicates(keep = 'first', inplace = True)
         print("Nombre d'observations après nettoyage des doublons :", self.data.shape[0])
@@ -102,17 +118,14 @@ class PreprocessingRawData:
         '''Création de la colonne 'date_heure_operation' en Datetime (pour filtrer sur les dates)'''
 
         # On retire les observations manquantes:
-        if self.data is None:
-            raise ValueError("self.data doit d'abord être initialisé")
+        self.check_not_None()
         nb_avant = self.data.shape[0]
         self.data = self.data.dropna(subset = ["date_operation"])
         nb_apres = self.data.shape[0]
         print(f"Suppression de {nb_avant - nb_apres} observations à cause de dates manquantes")
         # Vérification sur les colonnes:
-        required_cols = {'date_operation', 'heure_operation'}
-        missing_cols = required_cols - set(self.data.columns)
-        if missing_cols:
-            raise ValueError(f"Les colonnes suivantes ne sont pas présentes dans self.data :c {missing_cols}")
+        columns = ['date_operation', 'heure_operation']
+        self.check_missing_columns(columns)
         # Conversion et vérification:
         self.data["date_operation"]=  pd.to_datetime(self.data["date_operation"]).dt.normalize()
         self.data["heure_operation"] = pd.to_timedelta(self.data["heure_operation"].astype('str') + ':00')
@@ -131,11 +144,9 @@ class PreprocessingRawData:
         '''Algébrise les montants des opérations: + pour un dépôt et - pour un retrait'''
         
         # Vérifications préliminaires:
-        assert self.data is not None, "Il faut initialiser self.data"
-        required_cols = {"montant_operation", "sens_operation"}
-        missing_cols = required_cols - set(self.data.columns)
-        if missing_cols:
-            raise ValueError(f"Les colonnes suivantes sont manquantes: {missing_cols}")
+        self.check_not_None()
+        columns = ["montant_operation", "sens_operation"]
+        self.check_missing_columns(columns)
         # Algébrisation des montants:
         self.data.loc[self.data["sens_operation"] == 'D', "montant_operation"] *= -1
         # Abandon de la colonne 'sens_operation' devenue obsolète:
@@ -149,12 +160,9 @@ class PreprocessingRawData:
         '''Retourne les observations (et les dates correspondantes) dont la devise n'est pas en MAD'''
         
         # Vérifications préliminaires:
-        if self.data is None:
-            raise ValueError("self.data doit d'abord être initialisé")
-        required_cols = {"devise"}
-        missing_cols = required_cols - set(self.data.columns)
-        if missing_cols:
-            raise ValueError(f"Les colonnes suivantes sont manquantes: {missing_cols}")
+        self.check_not_None()
+        columns = ["devise"]
+        self.check_missing_columns(columns)
         # Décompte du nombre d'opérations incorrectes:
         print(self.data["devise"].value_counts(dropna=False))
         if not (self.data["devise"] != 'MAD').all():
@@ -173,7 +181,10 @@ class PreprocessingRawData:
             print("Liste des devises des observations problématiques :", liste_devises)
             return True
 
-    def change_currency(self, taux):
+    def change_currency(self, taux):  # Potentiellement à changer (si trop d'observations problématiques)
+        '''Changement (à la main) des observations problématiques'''
+
+        self.check_not_None()
         obs_non_MAD = self.data[self.data["devise"] != 'MAD']
         nb_to_change = obs_non_MAD.shape[0]
         liste_devises = obs_non_MAD["devise"].tolist()
@@ -192,8 +203,9 @@ class PreprocessingRawData:
         '''Filtre sur les opérations en agence (OA) et sur les opérations terminées (2)'''
 
         # Vérifications preliminaires:
-        if self.data is None:
-            raise ValueError("self.data doit d'abord être initialisé")
+        self.check_not_None()
+        columns = ["etat_origine_operation", "application_origine_operation"]
+        self.check_missing_columns(columns)
         print("Nombre d'observations avant filtrage: ", self.data.shape[0])
         # Filtrage sur 'etat_origine_operation':
         self.data = self.data[self.data["etat_origine_operation"] == 2]
@@ -206,8 +218,11 @@ class PreprocessingRawData:
     def filtre_type_operation(self):
         '''Filtrage sur le type d'opération'''
 
-        if self.data is None:
-            raise ValueError("self.data doit d'abord être initialisé")
+        # Vérifications préliminaires:
+        self.check_not_None()
+        columns = ["libelle_long_operation"]
+        self.check_missing_columns(columns)
+        # Filtrage sur le type d'opération:
         vals_libelle = self.data["libelle_long_operation"].dropna().unique()
         categ_retraits = [valeur for valeur in vals_libelle if str(valeur).startswith("RETRAIT")]
         categ_versements = [valeur for valeur in vals_libelle if str(valeur).startswith("VERSEMENT")]
@@ -220,17 +235,24 @@ class PreprocessingRawData:
     def remove_columns(self):
         '''Abandon des colonnes inutilisées'''
 
-        if self.data is None:
-            raise ValueError("self.data doit d'abord être initialisé")
-        print("Nombre de colonnes avant traitement :", self.data.shape[1])
-        self.data = self.data.drop(columns = ['identifiant_compte', 'reference_operation', 'code_marche', 'etat_operation', 
+        # On vérifie d'abord que toutes les colonnes spécifiées sont bien présentes dans les données:
+        self.check_not_None()
+        columns = ['identifiant_compte', 'reference_operation', 'code_marche', 'etat_operation', 
         'code_famille_operation', 'code_type_operation', 'application_origine_operation', 'motif_operation', 'devise', 'numero_caisse',
-        'heure_operation', 'date_operation', 'date_valeur', 'code_banque'], errors = 'ignore')
+        'heure_operation', 'date_operation', 'date_valeur', 'code_banque']
+        self.check_missing_columns(columns)
+        # Abandon des colonnes inutiles:
+        print("Nombre de colonnes avant traitement :", self.data.shape[1])
+        self.data = self.data.drop(columns = columns, errors = 'ignore')
         print("Nombre de colonnes retenues :", self.data.shape[1])
         print("Informations après nettoyage des colonnes inutiles :")
         print(self.data.info())
 
+
     def save_cleaned_data(self, newfilepath : str):
+        '''Sauvegarde des données nettoyées dans newfilepath'''
+
+        self.check_not_None()
         if self.aggregate and os.path.exists(newfilepath):
             complete = pd.read_csv(filepath = newfilepath, index_col = 0)
             to_save = pd.concat([complete,self.data], ignore_index = False)
@@ -240,6 +262,7 @@ class PreprocessingRawData:
         to_save = to_save.sort_values("date_heure_operation")
         to_save.to_csv(newfilepath, index = True, encoding = 'utf-8')
         print("Données nettoyées enregistrées au format csv")
+
 
     def preprocessing(self):
         '''Agglomère les différentes fonctions pour un preprocessing global (et complet)'''
@@ -283,20 +306,77 @@ class DataCharger:
         self.grouped = None
         print("N.B. : La liste des années et/ou des codes d'agence peut être modifiée à l'aide de la méthode 'change_agence_year_choice'.")
 
+
     def load_csv(self):
         '''Chargement des données complètes (attribuées à self.dataset)'''
 
-        self.dataset = pd.read_csv(self.filepath, index_col = 0)
+        # Vérification préalables sur le fichier:
+        if not hasattr(self, 'filepath') or self.filepath is None:
+            raise ValueError("Aucun chemin d'accès de fichier spécifié dans self.filepath")
+        if not isinstance(self.filepath, str):
+            raise TypeError(f"self.filepath doit forcément être une chaîne de caractère")
+        if not os.path.exists(self.filepath):
+            raise FileNotFoundError(f"Pas de fichier trouvé à l'adresse {self.filepath}")
+        # Ouverture du fichier et assignation à self.dataset:
+        try:
+            self.dataset = pd.read_csv(self.filepath, index_col = 0)
+        except Exception as e:
+            raise ValueError(f"Erreur lors du chargement du fichier CSV: {e}")
+        if 'date_heure_operation' not in self.dataset.columns:
+            raise ValueError("La colonne 'date_heure_operation' est absente des données")
         self.dataset = self.dataset.sort_index()
         self.dataset = self.dataset.sort_values("date_heure_operation")
         self.dataset.index = self.dataset.index.astype(int)
-        print("Données complètes chargées")
-        print("Visualisation des données :")
+        print("Données complètes chargées avec succès")
+        print("Visualisation des données: ")
         print(self.dataset.head(10))
+
+
+    def check_data(self, check_dataset : Optional[bool] = True,
+                    check_data: Optional[bool] = True, allow_empty: Optional[bool] = False):
+        '''Vérification de l'existence des données'''
+
+        if check_dataset:
+            if not hasattr(self, 'dataset') or self.dataset is None:
+                raise AttributeError("L'attribut 'dataset' est vide")
+            if not allow_empty and self.dataset.empty:
+                raise ValueError("Les données chargées dans 'dataset' sont vides")
+        if check_data:
+            if not hasattr(self,'data') or self.data is None:
+                raise AttributeError("L'attribut 'data' est vide")
+            if not allow_empty and self.data.empty:
+                raise ValueError("Les données chargées dans 'data' sont vides")
+
+
+    def check_missing_columns(self, columns: list[str], source : Optional[str] = 'dataset', raise_error : Optional[bool] = True):
+        '''Vérifie que les colonnes en argument sont bien présentes dans le dataset'''
+
+        df = None
+        if not isinstance(columns,list) or not all(isinstance(col,str) for col in columns):
+            raise TypeError("L'argument 'columns' doit être une liste de chaînes de caractères")
+        if source == 'dataset':
+            if not hasattr(self,'dataset') or self.dataset is None:
+                 raise AttributeError("L'attribut 'dataset' est manquant ou vide")
+            df = self.dataset
+        elif source == 'data':
+            if not hasattr(self,'data') or self.data is None:
+                raise AttributeError("L'attribut 'data' est manquant ou vide")
+            df = self.data
+        else:
+            raise ValueError("L'attribut 'source' doit valoir 'dataset' ou 'data'")
+        missing = set(columns) - set(df.columns)
+        if missing:
+            if raise_error:
+                raise ValueError(f"Colonnes absentes dans le dataset: {missing}")
+            else:
+                print(f"Colonnes manquantes dans le dataset considéré: {missing}")
+                return missing
+
 
     def verif_vides(self):
         '''Enlève les observations avec des valeurs vides'''
 
+        self.check_data()
         for column in self.dataset.columns:
             if self.dataset[column].isna().any():
                 print(f"La colonne {column} contient des valeurs manquantes")
@@ -304,20 +384,33 @@ class DataCharger:
             else:
                 print(f'Aucune valeur manquante dans la colonne {column}')
 
-    def verif_encodage(self):
-        '''Vérification de l'encodage des colonnes importantes (en particulier pour les dates)'''
 
-        self.dataset["date_heure_operation"] = pd.to_datetime(self.dataset["date_heure_operation"])
-        self.dataset.index = self.dataset.index.astype(int)
-        self.dataset["libelle_long_operation"] = self.dataset["libelle_long_operation"].astype('string')
-        self.dataset["libelle_court_operation"] = self.dataset["libelle_court_operation"].astype('string')
-        self.dataset["identifiant_operation"] = self.dataset["identifiant_operation"].astype('string')
+    def verif_encodage(self): 
+        '''Vérification de l'encodage des colonnes importantes (en particulier pour les dates)'''
+        
+        # On commence par vérifier que les colonnes sont bien présentes dans le dataset:
+        self.check_data()
+        columns = ["date_heure_operation", "libelle_long_operation",
+                         "libelle_court_operation", "identifiant_operation"]
+        self.check_missing_columns(columns)
+        try:
+            self.dataset["date_heure_operation"] = pd.to_datetime(self.dataset["date_heure_operation"])
+            self.dataset.index = self.dataset.index.astype(int)
+            self.dataset["libelle_long_operation"] = self.dataset["libelle_long_operation"].astype('string')
+            self.dataset["libelle_court_operation"] = self.dataset["libelle_court_operation"].astype('string')
+            self.dataset["identifiant_operation"] = self.dataset["identifiant_operation"].astype('string')
+        except Exception as e:
+            raise RuntimeError(f"Erreur lors du reformatage: {e}")
+        print("Encodage réalisé avec succès")
         print(self.dataset.info())
 
 
-    def completion_data(self):
+    def completion_data(self):  
         '''Ajout de colonnes nécessaires au traitement des données (notamment les flux)'''
 
+        self.check_data()
+        columns = ["date_heure_operation", "montant_operation"]
+        self.check_missing_columns(columns)
         self.dataset["jour"] = self.dataset["date_heure_operation"].dt.date
         self.dataset["crédit"] = self.dataset["montant_operation"].apply(lambda x: x if x>0 else 0)
         self.dataset["débit"] = self.dataset["montant_operation"].apply(lambda x: -x if x<0 else 0)
@@ -325,6 +418,11 @@ class DataCharger:
 
 
     def change_assignation(self, agence : Optional[List[int]] = None, annee : Optional[List[int]] = None, choice : Optional[int] = None):
+        '''Pour changer le choix de l'assignation des données'''
+
+        self.check_data()
+        if not any([agence, annee, choice]):
+            raise ValueError("Au moins l'un des arguments ('agence', 'annee', 'agence') doit être renseigné correctement")
         if agence:
             agence = agence if isinstance(agence, list) else [agence]
             self.code = agence
@@ -333,8 +431,9 @@ class DataCharger:
             annee = annee if isinstance(annee, list) else [annee]
             self.year = annee
             print(f"Une (ou plusieurs) nouvelle(s) années(s) a (ont) été sélectionnée(s) : {annee}")
-        if choice:
-            assert choice in [1,2,3]
+        if choice is not None:
+            if choice not in [1,2,3]:
+                raise ValueError("choice doit être un entier compris entre 1 et 3 inclus")
             self.choice = choice
             print(f'Un nouveau choix a été effectué : {choice}')
         self.selection_agence()
@@ -343,25 +442,37 @@ class DataCharger:
         self.assert_assign_data()
         return self.data
 
+
     def nb_agences_annees_dataset(self):
+        '''Affiche le nombre d'agences présentes dans les données'''
+
+        self.check_data()
         nb_agences = self.dataset.index.nunique()
         print("Le nombre d'agences présentes dans le dataset complet est de :", nb_agences)
         annee_min = self.dataset["date_heure_operation"].dt.year.min()
         annee_max = self.dataset["date_heure_operation"].dt.year.max()
         print(f"Le dataset va de {annee_min} jusqu'à {annee_max}")
 
-    def liste_annees_agences_data(self):
-        if not self.data.empty:
-            liste_agences = self.data.index.unique().tolist()
-            liste_annees = self.data["date_heure_operation"].dt.year.unique().tolist()
-        else:
+
+    def liste_annees_agences_data(self):  
+        '''Renvoie la liste des agences et des années disponibles dans le dataset complet'''
+
+        self.check_data()
+        columns = ["date_heure_operation"]
+        self.check_missing_columns(columns)
+        try:
             liste_agences = self.dataset.index.unique().tolist()
             liste_annees = self.dataset["date_heure_operation"].dt.year.unique().tolist()
+        except Exception as e:
+            raise RuntimeError(f"Erreur lors de l'extraction des années ou agences : {e}")
         print("Liste des agences présentes dans le dataset complet :", liste_agences)
         print("Liste des années présentes dans le dataset complet :", liste_annees)
         return liste_agences, liste_annees
 
+
     def selection_agence(self):
+
+        self.check_data()
         if self.code:
             self.code = self.code if isinstance(self.code,list) else [self.code]
             self.data_agence = self.dataset.loc[self.dataset.index.isin(self.code)].copy()
@@ -394,7 +505,7 @@ class DataCharger:
                     self.data = self.dataset
                 case 2:
                     self.data = self.data_agence
-                case _:
+                case 3:
                     self.data = self.data_years
         else:
             if self.year:
@@ -445,7 +556,10 @@ class DataCharger:
         else:
             print("Aucune donnée affectée à self.data_years")
 
+
     def preparer_donnees(self):
+        '''Permet de compiler les principales méthodes de la classe'''
+
         self.load_csv()
         self.verif_vides()
         self.verif_encodage()
