@@ -24,28 +24,64 @@ class Clustering_agences:
     # On suppose enfin que complete_data a été nettoyé au préalable avec PreprocessingRawData
     # Dans un premier temps, on a besoin de créer un nouveau DataFrame avec les features retenue
     def __init__(self, new_filepath : str, filepath : str, already_created : Optional[bool] = False):
+        '''Constructeur de la classe Clustering_agences'''
+
+        # Stockage des données:
         self.filepath = filepath  # Filepath de la donnée complète
-        self.new_filepath = new_filepath
+        self.new_filepath = new_filepath  # Pour stocker les données nécessaires au clustering
         self.data = None  # On commence par créer un DataFrame vide
-        self.data_scaled = None
-        self.best_nb_k_means = None
-        self.pca_object = None
-        self.applied_pca = None
-        self.already_created = already_created
-        self.best_eps = None
-        self.best_params_dbscan = None
+        self.data_scaled = None  # Pour normaliser les données
+        self.already_created = already_created  # Si les données ont déjà été créées
+        self.random_state = 42   # graine pour l'initialisation aléatoire
+
+        # Pour stocker la PCA:
+        self.pca_object = None   # Stockage de l'objet PCA
+        self.applied_pca = None  # Stockage de l'application de PCA aux données
+
+        # Attributs pour k-means:
+        self.best_nb_kmeans = None  # Pour stocker le meilleur nombre de clusters pour k-means
+        self.kmeans_best_score = None  # Stockage du silhouette score pour le meilleur k-means
+
+        # Attributs pour Hierarchical clustering:
+        self.hierarchical_best_method = None   # Stockage de la meilleure méthode pour hierarchical clustering
+        self.hierarchical_best_max_clusters = None  # Stockage du meilleur max_cluster
+        self.hierarchical_best_score = None  # Stockage du silhouette score pour le meilleur cluster
+        
+        # Attributs pour DBSCAN:
+        self.dbscan_best_eps = None  # Stockage du meilleur epsilon pour DBSCAN
+        self.dbscan_best_min_samples = None   # Stockage du meilleur min_samples pour DBSCAN
+        self.dbscan_best_score = None  # Stockage du silhouette score pour le meilleur DBSCAN
+
 
     def remplissage_data(self): 
         '''Critique: création des données nécessaires aux algos de clustering'''
 
+        if not hasattr(self,'filepath') or not isinstance(self.filepath, str):
+            raise AttributeError("L'attribut 'filepath' n'existe pas ou est incorrect")
+        if not os.path.exists(self.filepath):
+            raise FileNotFoundError(f"Aucun fichier trouvé à l'adresse {self.filepath}")
         dataset = DataCharger(self.filepath) # Chargement des données complètes nettoyées
+        dataset.preparer_donnees()
+        dataset = dataset.dataset  # Récupération du DataFrame
+        if dataset is None or dataset.empty:
+            raise ValueError("Le dataset chargé est vide")
+        if dataset.index is None or dataset.index.empty:
+            raise ValueError("Le dataset ne contient pas d'index")
         liste_agences = dataset.index.tolist()
         lignes  = []
         for agence in liste_agences:
-            class_data = DataCharger(filepath = self.filepath, code = agence, annee = 2024)
-            data_agence = BasicStats(class_data)
-            lignes.append(data_agence.data_retrieval_clustering())
+            try:
+                class_data = DataCharger(filepath = self.filepath, code = agence, annee = 2024)
+                data_agence = BasicStats(class_data)
+                lignes.append(data_agence.data_retrieval_clustering())
+            except Exception as e:
+                print(f"Erreur lors du chargement des données de l'agence {agence} : {e}")
+                continue
+        if not lignes:
+            raise ValueError("Aucune donnée n'a pu être traitée")
         self.data = pd.DataFrame(lignes)
+        if 'code_agence' not in self.data.columns:
+            raise ValueError("Impossible de créer l'index: 'code'agence' n'existe pas")
         self.data.set_index("code_agence", inplace = True)
         return self.data
     
@@ -85,6 +121,37 @@ class Clustering_agences:
             print(f"Données chargées depuis {self.new_filepath}")
         except Exception as e:
             raise IOError(f"Erreur lors du chargement des fichiers depuis {self.new_filepath}")
+        
+
+    def check_data(self, scaled : Optional[bool] = False, pca : Optional[bool] = False):
+        if not hasattr(self,'data') or self.data is None:
+            raise ValueError("self.data doit impérativement être initialisé")
+        if scaled:
+            if not hasattr(self,'data_scaled'):
+                raise AttributeError("'self.data_scaled' n'existe pas")
+            if self.data_scaled is None:
+                raise ValueError("Il faut impérativement normaliser les données")
+        if pca:
+            if not hasattr(self,'applied_pca'):
+                raise AttributeError("'self.applied_pca' n'existe pas")
+            if self.applied_pca is None:
+                raise ValueError("Il faut appliquer la PCA à self.data_scaled")
+        if self.data.empty:
+            raise ValueError("self.data est vide")
+        if scaled:
+            if self.data_scaled.empty:
+                raise ValueError("self.data_scaled est vide")
+        if pca:
+            if self.applied_pca.empty:
+                raise ValueError("self.applied_pca est vide")
+            
+
+    def set_random_seed(self, seed: int):
+        if not hasattr(self,'random_state'):
+            raise AttributeError("self n'a pas d'attribut 'random_state'")
+        else:
+            self.random_state = seed
+        
 
     # A partir d'ici, on suppose disposer de la donnée adéquate pour lancer un algorithme de clustering
     # Cad : on suppose disposer d'un dataframe avec le code_agence en index et des features en colonne
@@ -93,6 +160,7 @@ class Clustering_agences:
     def heatmap_features(self):
         '''Visualisation des features corrélées avec une heatmap'''
 
+        self.check_data()
         plt.figure(figsize = (15,15))
         sns.heatmap(self.data.corr(), cmap = 'coolwarm', center = 0, annot = True, fmt = ".2f")
         plt.show()   # On visualise les corrélations potentielles pour éviter trop de features
@@ -101,20 +169,23 @@ class Clustering_agences:
     def scaling_data(self):
           '''Normalisation des données avec StandardScaler pour le clustering'''
 
+          self.check_data()
           scaler = StandardScaler()
           data_scaled = scaler.fit_transform(self.data)
           self.data_scaled = pd.DataFrame(data_scaled, columns = self.data.columns, index = self.data.index)
 
 
     def remove_feature(self, column):
+        '''Permet à l'utilisateur d'enlever une feature'''
+
+        self.check_data()
         self.data = self.data.drop(columns = column)  # Si une feature est inutile
 
 
     def remove_or_not(self):  
         '''Demande à l'utilisateur s'il souhaite retirer des features avant PCA et/ou clustering'''
 
-        if self.data is None:
-            raise ValueError("self.data doit impérativement être initialisé")
+        self.check_data()
         while True:
             user_input = input("Voulez-vous retirer des variables ? (True/False): " )
             if user_input in ['true', 'True', 't', 'oui', 'yes','y','Y']:
@@ -141,12 +212,27 @@ class Clustering_agences:
                     break
         else:
             print("Aucune variable supprimée")
-        
+            
+
+    def remove_highly_correlated(self, threshold : Optional[float] = 0.90):
+        '''On enlève automatiquement les features très corrélées (ici avec un coef > 0.90)'''
+
+        self.check_data()
+        corr_matrix = self.data.corr().abs()
+        upper  = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
+        to_drop = [column for column in upper.columns if any(upper[column] > threshold)]
+        if to_drop:
+            print(f"Suppression des colonnes fortement corrélées (> {threshold}): {to_drop}")
+            self.data.drop(columns = to_drop, inplace = True)
+        else:
+            print("Pas de colonnes fortement corrélées trouvées")
+        return self.data
+
 
     def apply_PCA(self, n_components : Optional[int] = None, var_kept : Optional[float] = None):
-        '''Application d'une PCA sur les données normalisées, stockées dans self.scaled_data'''
+        '''Application d'une PCA sur les données normalisées, stockées dans self.data_scaled'''
 
-        assert self.data_scaled is not None, "Les données doivent impérativement être standardisées"
+        self.check_data(True)
         if var_kept is not None:
             pca = PCA(n_components = var_kept)
         elif n_components is not None:
@@ -165,8 +251,7 @@ class Clustering_agences:
     def elbow_method_k_means(self):  # On cherche à déterminer le nombre optimal de clusters
         '''Détermination du nombre de clusters k_means avec elbow_method'''
 
-        if self.data_scaled is None:
-            raise ValueError("Il faut commencer par normaliser les données")
+        self.check_data(True)
         inertias = []
         K = range(1, 11)  # nombre de clusters à tester
         for k in K:
@@ -185,8 +270,7 @@ class Clustering_agences:
     def silhouette_score_k_means(self):
         '''Evaluation des clusters k_means par silhouette score'''
 
-        if self.data_scaled is None:
-            raise ValueError("Il faut tout d'abord normaliser les données")
+        self.check_data(True)
         silhouette_scores = []
         for k in range(2, 11):  # 2 clusters minimum
             kmeans = KMeans(n_clusters=k, random_state=42)
@@ -206,8 +290,7 @@ class Clustering_agences:
         '''Détermination du meilleur nombre de clusters par silhouette score'''
 
         # Vérification préliminaire
-        if self.data_scaled is None:
-            raise ValueError("Il faut d'abord normaliser les données : self.data_scaled est vide")
+        self.check_data(True)
         # Calcul des silhouette score
         silhouette_scores = []
         inertias = []
@@ -217,47 +300,46 @@ class Clustering_agences:
             silhouette_scores.append(silhouette_score(self.data_scaled, labels))
             inertias.append(kmeans.inertia_)
         best_k = silhouette_scores.index(max(silhouette_scores)) + 2
-        self.best_nb_k_means = best_k
+        self.best_nb_kmeans = best_k
         print(f"Meilleur nombre de clusters estimé (silhouette) : {best_k}")
         return best_k
 
 
-    def clustering_k_means(self, pca: Optional[bool] = False, random_state: Optional[int] = 42):
+    def clustering_k_means(self, pca: Optional[bool] = False):
         '''Création des clusters sur la base de la méthode k-means (avec ou sans PCA)'''
 
-        k = self.best_nb_k_means
-        assert k is not None, "Définissez le nombre optimal de clusters à créer"
-        kmeans_final = KMeans(n_clusters = k, random_state = random_state)
-        if not pca:
-            assert self.data_scaled is not None, "Il faut d'abord standardiser les données avec StandardScaler"
-            kmeans_final.fit(self.data_scaled)
-        else:
-            assert self.applied_pca is not None, "Il faut d'abord appliquer la PCA aux données"
-            kmeans_final.fit(self.applied_pca)
+        self.check_data(True, pca)
+        k = self.best_nb_kmeans
+        assert k is not None, "Définissez d'abord le nombre optimal de clusters à créer"
+        data_used = self.applied_pca if pca else self.data_scaled
+        kmeans_final = KMeans(n_clusters = k, random_state = self.random_state)
+        kmeans_final.fit_transform(data_used)
         cluster_labels = kmeans_final.labels_
+        final_score = silhouette_score(data_used, cluster_labels)
         if not pca:
             self.data["cluster_kmeans"] = cluster_labels
             group_cluster_kmeans = self.data.groupby("cluster_kmeans")
         else:
-            self.applied_pca["cluster_kmeans_pca"] = cluster_labels
-            group_cluster_kmeans = self.data.groupby("cluster_kmeans_pca")
+            data_used["cluster_kmeans_pca"] = cluster_labels
+            group_cluster_kmeans = data_used.groupby("cluster_kmeans_pca")
+        print(f"Silhouette score atteint (pour k = {k}): {final_score}")
         for cluster_id, group in group_cluster_kmeans:  # renvoie une liste des clusters avec les agences
             print(f"\nCluster {cluster_id}: ")
             print(group.index.tolist())  
-        return group_cluster_kmeans
+        self.kmeans_best_score = final_score
+        return group_cluster_kmeans, final_score
     
 
-    def treemap_clusters_kmeans(self, use_pca : Optional[bool] = False):
+    def treemap_clusters_kmeans(self, pca : Optional[bool] = False):
         '''Visualisation des clusters k-means par treemap'''
 
         # Choix de la colonne et vérification de la présence dans les données
-        data_used = self.applied_pca if use_pca else self.scaled_data
-        if data_used is None:
-            raise ValueError("Il faut normaliser et/ou appliquer une PCA aux données au préalable")
+        self.check_data(True, pca)
+        data_used = self.applied_pca if pca else self.data
         col_name = "cluster_kmeans_pca" if data_used == self.applied_pca else "cluster_kmeans"
         if col_name not in data_used.columns:
             raise ValueError(f"Les données ne contiennent pas la colonne {col_name}")
-        clusters = self.data_used.groupby(col_name)
+        clusters = data_used.groupby(col_name)
         sizes = [len(group) for _,group in clusters]
         labels = [
         f"Cluster {cid}\n" + "\n".join(group.index.astype(str).tolist())
@@ -267,7 +349,7 @@ class Clustering_agences:
         plt.figure(figsize=(12, 6))
         squarify.plot(sizes=sizes, label=labels, alpha=0.8)
         plt.axis('off')
-        plt.title(f"Treemap des clusters kmeans {'(avec PCA)' if use_pca else '(sans PCA)'} et agences associées")
+        plt.title(f"Treemap des clusters kmeans {'(avec PCA)' if pca else '(sans PCA)'} et agences associées")
         plt.tight_layout()
         plt.show()
 
@@ -280,8 +362,10 @@ class Clustering_agences:
     # Elle se base sur le calcul du coefficient de corrélation cophénétique
     # Plus il est proche de 1, meilleure est la méthode
     def find_best_method(self, pca : Optional[bool] = False):
+        '''On utilise le coefficient cophénétique pour trouver la meilleure méthode'''
+
+        self.check_data(True, pca)
         data_used = self.applied_pca if pca else self.data_scaled
-        assert data_used is not None, "Aucune donnée disponible pour clusteriser"
         methods = ['ward', 'complete', 'average', 'single']  # Méthodes possibles pour hierarchical clustering
         best_method = None
         best_score = -1  # Pire score de corrélation possible
@@ -293,14 +377,17 @@ class Clustering_agences:
                 best_method = method
         print("Meilleure méthode estimée par corrélation cophénétique: ", best_method)
         print("Coefficient de corrélation cophénétique atteint par la méthode: ", round(best_score,4))
+        self.hierarchical_best_method = best_method
         return best_method, best_score
         
 
     # La deuxième méthode calcule (automatiquement) le meilleur nombre de clusters en se basant sur le plus gros saut sur le dendrogramme
     # En gros, à cet endroit, le dendrogramme fusionne des groupes très différents, donc on coupe avant.
-    def find_best_max_cluster(self, method : Optional[str] = "ward", pca : Optional[bool] = False, return_score : Optional[bool] = False):
+    def find_best_max_cluster(self, method : Optional[str] = "ward", pca : Optional[bool] = False):
+        '''Méthode pour trouver le bon nombre de clusters pour hierarchical clustering'''
+
+        self.check_data(True, pca)
         data_used = self.applied_pca if pca else self.data_scaled
-        assert data_used is not None, "Aucune donnée disponible pour clusteriser"
         Z = linkage(data_used, method = method)
         distances = Z[:,2]
         deltas = np.diff(distances)
@@ -310,27 +397,28 @@ class Clustering_agences:
         nb_clusters = len(set(labels))
         print(f"Nombre optimal estimé de clusters hiérarchiques: {nb_clusters}")
         score = silhouette_score(data_used, labels)
-        score = silhouette_score(data_used, labels) if return_score else None
-        if return_score:
-            print("Silhouette score: ", score)
+        print("Silhouette score pour hierarchical clustering, (méthode = {method}, nb_clusters = {nb_clusters}): {score}")
+        self.hierarchical_best_max_clusters = nb_clusters
         return nb_clusters, labels, threshold_distance, score
     
 
-    def select_method_cluster(self, pca : Optional[bool] = False):
-        best_method = self.find_best_method(pca)[0]
-        best_cluster = self.find_best_max_cluster(pca, method = best_method)[0]
-        return best_method, best_cluster   # S'assurer de la logique avec la méthode suivante...
-    
-
     def clustering_hierarchical(self, pca : Optional[bool] = False, method : str = 'ward', dendrogram : Optional[bool] = False,
-                                max_cluster : Optional[int] = None, best : Optional[bool] = False):
-        data_to_use = self.data_scaled
-        if pca:
-            data_to_use = self.applied_pca
-        assert data_to_use is not None
+                                max_cluster : Optional[int] = None, best : Optional[bool] = True):  # A modifier pour avoir même logique que kmeans
+        '''Mise en oeuvre de hierarchical clustering sur les données'''
+
+        self.check_data(True, pca)
+        data_used = self.applied_pca if pca else self.data_scaled
         if best:
-            method, max_cluster = self.select_method_cluster()
-        Z = linkage(data_to_use, method = method)
+            if self.hierarchical_best_method is None:
+                raise ValueError("L'attribut 'self.hierarchical_best_method' est vide")
+            elif self.hierarchical_best_max_clusters is None:
+                raise ValueError("L'attribut 'self.hierarchical_best_max_clusters' est vide")
+            try:
+                method = self.hierarchical_best_method
+                max_cluster = self.hierarchical_best_max_clusters
+            except Exception as e:
+                print(f"Erreur lors de l'accès aux meilleurs paramètres : {e}")
+        Z = linkage(data_used, method = method)
         if dendrogram:
             plt.figure(figsize=(14, 7))
             dendrogram(Z, labels=self.data.index.tolist(), leaf_rotation=90)
@@ -339,20 +427,32 @@ class Clustering_agences:
             plt.ylabel("Distance")
             plt.tight_layout()
             plt.show()
-        labels = None
-        if max_cluster:
-            labels = fcluster(Z, max_cluster, criterion='maxclust')
+        labels = fcluster(Z, max_cluster, criterion='maxclust')
+        if pca:
+            data_used["cluster_hierarchical_pca"] = labels
+            group_cluster_hierarchical = data_used.groupby("cluster_hierarchical_pca")
+        else:
             self.data["cluster_hierarchical"] = labels
-            print(f"\nAgences regroupées en {max_cluster} clusters :")
-            for cluster_id in range(1, max_cluster + 1):
-                membres = self.data[self.data["cluster_hierarchical"] == cluster_id].index.tolist()
-                print(f"Cluster {cluster_id} : {membres}")
-        return labels
+            group_cluster_hierarchical = self.data.groupby("cluster_hierarchical")
+        final_score = silhouette_score(data_used, labels)
+        print(f"Silhouette score atteint (pour méthode = {method}, nb_cluster = {max_cluster}): {final_score}")
+        for cluster_id, group in group_cluster_hierarchical:  # renvoie une liste des clusters avec les agences
+            print(f"\nCluster {cluster_id}: ")
+            print(group.index.tolist())  
+        self.hierarchical_best_score = final_score
+        return group_cluster_hierarchical, final_score
+
     
 
-    def treemap_clusters_hierarchical(self):
-        assert "cluster_hierarchical" in self.data.columns, "Il faut commencer par appliquer une méthode de hierarchical clustering"
-        clusters = self.data.groupby("cluster_hierarchical")
+    def treemap_clusters_hierarchical(self, pca: Optional[bool] = False):
+        '''Visualisation des hierarchical clusters par treemap'''
+
+        self.check_data(True, pca)
+        data_used = self.applied_pca if pca else self.data
+        col_name = "cluster_hierarchical_pca" if pca else "cluster_hierarchical"
+        if col_name not in data_used.columns:
+            raise ValueError(f"Les données ne contiennent pas la colonne {col_name}")
+        clusters = data_used.groupby(col_name)
         sizes = [len(group) for _, group in clusters]
         labels = [
         f"Cluster {cid}\n" + "\n".join(group.index.astype(str).tolist())
@@ -366,25 +466,6 @@ class Clustering_agences:
         plt.show()
 
 
-
-
-# Méthodes pour la visualisation (avec PCA, t-SNE):   # Revoir la méthode pour prendre en compte la nouvelle logique
-
-    def tsne_visual_clusters(self, cluster_col : str = "cluster_kmeans", pca : Optional[bool] = False,
-                             perplexity  : int = 15, random_state: Optional[int] = 42):
-        assert cluster_col in self.data.columns, f"Il faut d'abord appliquer le clustering qui donne la colonne {cluster_col}"
-        data_used = self.applied_pca if pca else self.data_scaled
-        assert data_used is not None, "Il faut impérativement normaliser les données"
-        tsne = TSNE(n_components = 2, perplexity = perplexity, random_state = random_state)
-        tsne_result = tsne.fit_transform(data_used)
-        df_tsne = pd.DataFrame(tsne_result, columns = ['TSNE1', 'TSNE2'], index = self.data.index)
-        df_tsne[cluster_col] = self.data[cluster_col]
-        plt.figure(figsize = (10,6))
-        sns.scatterplot(data = df_tsne, x='TSNE1', y='TSNE2', hue = cluster_col, palette = 'tab10', s=80)
-        plt.title(f"Projection t-SNE des clusters ({cluster_col})")
-        plt.legend(title='Cluster', bbox_to_anchor=(1.05, 1), loc='upper left')
-        plt.tight_layout()
-        plt.show()
 
     
 # Méthodes pour la clusterisation DBSCAN:
@@ -408,26 +489,18 @@ class Clustering_agences:
         plt.show()
 
     
-    # def retrieve_best_eps(self, best_eps):
-    #     '''Retourne le meilleur epsilon en se basant sur le graphe des k-distances'''
-
-    #     assert self.best_eps is None, "best epsilon a déjà été estimé"
-    #     self.best_eps = best_eps
-
-    
     def calib_params_dbscan(self, eps_range = np.arange(0.3,3,0.1), min_samples_range = range(3,10),
                             verbose : Optional[bool] = False, pca : Optional[bool] = False):
         '''Grid_search sur le couple (eps,min_samples) pour DBSCAN en se basant sur le silhouette score'''
 
-        data_used = self.applied_pca if pca else self.scaled_data
-        if data_used is None:
-            raise ValueError("Il faut appliquer la normalisation et/ou une PCA préliminaire(s)")
+        self.check_data(True, pca)
+        data_used = self.applied_pca if pca else self.data_scaled
         best_params = None
         best_score = -1 
         results = []
         for eps, min_samples in itertools.product(eps_range, min_samples_range):
             db = DBSCAN(eps = eps, min_samples = min_samples)
-            labels = db.fit_transform(data_used)
+            labels = db.fit_predict(data_used)
             n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
             if n_clusters < 2:
                 continue
@@ -445,47 +518,67 @@ class Clustering_agences:
             print("Aucun clustering DBSCAN satisfaisant trouvé")
         else:
             print(f"Meilleurs paramètres par grid-search: eps = {best_params[0]:.2f}, min_samples = {best_params[1]}")
-            self.best_params_dbscan = best_params
+            self.dbscan_best_eps = best_params[0]
+            self.dbscan_best_min_samples = best_params[1]
             return best_params, best_score, results
 
 
     def clustering_dbscan(self, eps : float = 0.5, min_samples : int = 5, pca : Optional[bool] = False,
-                          best: Optional[bool] = False):
+                          best: Optional[bool] = True):
         '''Application de DBSCAN après application ou non de la PCA'''
 
+        # A modifier pour créer le cas échéant la colonne cluster_dbscan_pca
+
+        self.check_data(True, pca)
         data_used = self.applied_pca if pca else self.data_scaled
-        if data_used is None:
-            raise ValueError("Il faut impérativement commencer par normaliser les donnés et/ou appliquer une PCA")
         if best:
-            eps = self.best_params_dbscan[0]
-            min_samples = self.best_params_dbscan[1]
+            if self.dbscan_best_eps is None:
+                raise ValueError("L'attribut 'self.dbscan_best_eps' est vide")
+            elif self.dbscan_best_min_samples is None:
+                raise ValueError("L'attribut 'self.dbscan_best_eps' est vide")
+        try:
+            eps = self.dbscan_best_eps
+            min_samples = self.dbscan_best_min_samples
+        except Exception as e:
+            print(f"Erreur lors de l'accès aux meilleurs paramètres: {e}")
         dbscan = DBSCAN(eps = eps, min_samples = min_samples)
         labels = dbscan.fit_predict(data_used)
-        self.data["cluster_dbscan"] = labels
+        if pca:
+            data_used["cluster_dbscan_pca"] = labels
+        else:
+            self.data["cluster_dbscan"] = labels
         n_clusters = len(set(labels)) - (1 if -1 in labels else 0)  #nb_clusters
         n_noise = list(labels).count(-1)  # nb_agences en solo
         print(f"Nombre de clusters créés par DBSCAN: {n_clusters}")
         print(f"Nombre d'agences solitaires (classées comme bruit): {n_noise}")
         # Visualisation des regroupements par les clusters créés
         for cluster_id in sorted(set(labels)):
-            membres = self.data[self.data["cluster_dbscan"] == cluster_id].index.tolist()  # Liste des membres pour un cluster donné
+            if pca:
+                membres = data_used[data_used["cluster_dbscan_pca"] == cluster_id].index.tolist()  # Liste des membres pour un cluster donné
+            else:
+                membres = data_used[data_used["cluster_dbscan"] == cluster_id].index.tolist()
             nom = "Bruit" if cluster_id == -1 else f"Cluster {cluster_id}"
             print(f"{nom} : {membres}")
         # Calcul du silhouette_score:
         if n_clusters > 1:
             score = silhouette_score(data_used, labels)
+            self.dbscan_best_score = score
             print(f"Silhouette score pour DBSCAN: {score : .3f}")
         else:
+            score = None
             print("Silhouette score non défini")
         return labels, score
     
 
-    def treemap_clusters_dbscan(self):
-        '''Treemap pour l'affichage des clusters'''
+    def treemap_clusters_dbscan(self, pca: Optional[bool] = False):
+        '''Treemap pour l'affichage des clusters DBSCAN'''
 
-        if "cluster_dbscan" not in self.data.columns:
-            raise ValueError("Il faut d'abord appliquer DBSCAN")
-        clusters = self.data.groupby("cluster_dbscan")
+        self.check_data(True, pca)
+        data_used = self.applied_pca if pca else self.data
+        col_name = 'cluster_dbscan_pca' if pca else 'cluster_dbscan'
+        if col_name not in data_used.columns:
+            raise ValueError(f"Les données ne contiennent pas la colonne {col_name}")
+        clusters = data_used.groupby(col_name)
         sizes = [len(group) for _,group in clusters]
         labels = [f"Cluster {cid}" if cid != -1 else "Bruit"
                   + '\n' + '\n'.join(group.index.astype(str).tolist())
@@ -497,7 +590,38 @@ class Clustering_agences:
         plt.tight_layout()
         plt.show()
 
-    
+
+
+
+# Méthodes pour la visualisation (avec t-SNE):   # Revoir la méthode pour prendre en compte la nouvelle logique
+
+    def tsne_visual_clusters(self, choice_method, pca : Optional[bool] = False,
+                             perplexity  : int = 15):
+        '''Visualisation par emploi de t-SNE'''    # A modifier en profondeur...
+        
+        methods = ["kmeans", "hierarchical", "dbscan"]
+        if choice_method not in methods:
+            raise ValueError(f"Le choix de la méthode doit être inclus dans la liste {methods}")
+        cluster_col_map = {"kmeans": ["cluster_kmeans","cluster_kmeans_pca"],
+                       "hierarchical": ["cluster_hierarchical", "cluster_hierarchical_pca"],
+                       "dbscan": ["cluster_dbscan", "cluster_dbscan_pca"]}
+        self.check_data(True, pca)
+        data_used = self.applied_pca if pca else self.data
+        cluster_col = cluster_col_map[choice_method][1 if pca else 0]
+        if cluster_col not in data_used.columns:
+            raise ValueError(f"La colonne {cluster_col} n'est pas présente dans les données")
+        tsne = TSNE(n_components = 2, perplexity = perplexity, random_state = self.random_state)
+        tsne_result = tsne.fit_transform(data_used.drop(columns = [cluster_col], errors = 'ignore'))
+        df_tsne = pd.DataFrame(tsne_result, columns = ['TSNE1', 'TSNE2'], index = data_used.index)
+        df_tsne[cluster_col] = data_used[cluster_col]
+        plt.figure(figsize = (10,6))
+        sns.scatterplot(data = df_tsne, x='TSNE1', y='TSNE2', hue = cluster_col, palette = 'tab10', s=80)
+        plt.title(f"Projection t-SNE des clusters ({cluster_col})")
+        plt.legend(title='Cluster', bbox_to_anchor=(1.05, 1), loc='upper left')
+        plt.tight_layout()
+        plt.show()
+
+
 
 # Agrégation des méthodes de clustering:
 
@@ -507,21 +631,42 @@ class Clustering_agences:
         if self.data is None:
             self.load_data()
         if self.data_scaled is None:
-            self.scaling_data()    
+            self.scaling_data()   
 
 
-    def agreg_clustering(self, pca : Optional[bool] = False, use_pca : Optional[bool] = False,
-                         return_score : Optional[bool] = False, best : Optional[bool] = True):  # A compléter pour obtenir une méthode d'analyse
+    def compare_clusters_silhouette_score(self, pca: Optional[bool] = False):
+        '''Méthode de comparaison des clusters suivant le silhouette score'''
+
+        required_scores = {"kmeans": getattr(self, "kmeans_best_score", None),
+                           "hierarchical": getattr(self, "hierarchical_best_score", None),
+                           "dbscan": getattr(self, "dbscan_best_score", None)}
+        missing = [method for method, score in required_scores.items() if score is None]
+        if missing:
+            raise ValueError(f"Les méthodes suivantes n'ont pas de score associé: {missing}")
+        print("Silhouette scores: ")
+        for method, score in required_scores.items():
+            print(f" - {method.capitalize()} : {score:.4f}")
+        best_method = max(required_scores, key = required_scores.get)
+        best_score = required_scores[best_method]
+        print(f"\n Meilleure méthode d'après le silhouette score: {best_method}: {best_score}")
+        return best_method, best_score
+
+
+    def agreg_clustering(self, pca : Optional[bool] = False,
+                         best : Optional[bool] = True):  # A compléter pour obtenir une méthode d'analyse
         '''Méthode qui applique les 3 clusters aux données construites'''
 
         if not self.already_created:
             self.remplissage_data()
             self.save_data(self.new_filepath)
-        self.apply_kmeans(pca, use_pca)
-        self.apply_hierarchical_clustering(pca, return_score, best)
+        self.remove_highly_correlated()
+        self.apply_kmeans(pca)
+        self.apply_hierarchical_clustering(pca = pca, best = best)
+        self.apply_dbscan(pca = pca, best = best)
+        self.compare_clusters_silhouette_score()
 
 
-    def apply_kmeans(self, pca : Optional[bool] = False, use_pca : Optional[bool] = False):
+    def apply_kmeans(self, pca : Optional[bool] = False):
         '''Appelle les différentes méthodes pour effectuer une clusterisation k-means'''
 
         self.check_before_apply()
@@ -529,20 +674,34 @@ class Clustering_agences:
         self.silhouette_score_k_means()
         self.find_best_k()
         self.clustering_k_means(pca)
-        self.treemap_clusters_kmeans(use_pca)
-        self.tsne_visual_clusters(cluster_col = "cluster_kmeans", pca = pca)  # Attention à la logique avec t-SNE
+        self.treemap_clusters_kmeans(pca)
+        self.tsne_visual_clusters(choice_method = "kmeans", pca = pca)  # Attention à la logique avec t-SNE
+        # Effectivement, il va falloir modifier la dernière fonction pour kmeans....
 
 
-    def apply_hierarchical_clustering(self, pca: Optional[bool] = False, return_score : Optional[bool] = False,
-                                      best : Optional[bool] = True):
+    def apply_hierarchical_clustering(self, pca: Optional[bool] = False, best : Optional[bool] = True):
         '''Appelle les différentes méthodes pour effectuer une clusterisation hiérarchique'''
 
         self.check_before_apply()
         self.find_best_method(pca)
-        self.find_best_max_cluster(pca = pca, return_score = return_score)
+        self.find_best_max_cluster(pca = pca)
         self.clustering_hierarchical(pca = pca, best = best)
-        self.treemap_clusters_hierarchical()
-        
+        self.treemap_clusters_hierarchical(pca)
+        self.tsne_visual_clusters(choice_method = "hierarchical", pca = pca)
+
+
+    def apply_dbscan(self, pca : Optional[bool] = False, 
+                     eps_range = np.arange(0.3,3,0.1), min_samples_range = range(3,10),
+                            verbose : Optional[bool] = False, best : Optional[bool] = True):
+        '''Application des différentes méthodes pour le clustering DBSCAN'''
+
+        self.check_before_apply()
+        self.plot_k_distance(pca)
+        self.calib_params_dbscan(eps_range, min_samples_range, verbose, pca)
+        self.clustering_dbscan(pca = pca, best = best)
+        self.treemap_clusters_dbscan(pca)
+        self.tsne_visual_clusters(choice_method = "dbscan", pca = pca)
+
 
     # On pourrait aussi utiliser UMAP apparemment (à la place ou en plus de t-SNE)
     # Il faudrait utiliser des loggings à la place des prints.

@@ -4,6 +4,7 @@ from Code_analyse_OOP_term import PreprocessingRawData, DataCharger, BasicStats
 from Clustering_agences import Clustering_agences
 
 # Attention, il faut adapter les chemins d'accès suivant l'endroit de stockage des données
+# Il faudrait changer les args par des fonctions avec argument pour automatiser avec Streamlit (par exemple)
 
 def main():
     '''Lancement de toute la pipeline, de la récupération des données au clustering (pour l'instant)'''
@@ -20,6 +21,7 @@ def main():
     parser.add_argument('--agences', nargs = '*', type = int, help = "Liste sélectionnée des agences.")
     parser.add_argument('--aggregate', action = 'store_true', help = "Utilisé en cas de présence de données déjà nettoyées.")
     parser.add_argument('--already_created', action = 'store_true', help = "Les données pour le clustering existent déja.")
+    parser.add_argument('--pca', action = 'store_true', help = 'Utilisation ou non de PCA pour le clustering')
     args = parser.parse_args()
 
     # Preprocessing des fichiers:
@@ -48,9 +50,9 @@ def main():
             if not os.path.exists(clean_filepath):
                 raise FileNotFoundError(f"Pas de fichier nettoyé trouvé dans {clean_filepath}")
             try:
-                if args.agence and len(args.agence) != 1:
+                if args.agences and len(args.agences) != 1:   # erreur ici !
                     print("L'analyse nécessite de ne sélectionner qu'une seule agence")
-                if args.agence and len(args.agence) == 1:
+                if args.agences and len(args.agences) == 1:
                     print(f"Lancement d'une analyse statistique exploratoire pour l'(les) agence(s) {args.agences} sur l'(les) années {args.years}")
                     choice = DataCharger(filepath = clean_filepath, code = args.agences, annee = args.years)
                     choice.preparer_donnees()
@@ -67,8 +69,12 @@ def main():
             print("Lancement du clustering des agences")
             print("Clustering suivant k-means / hierarchical clustering / DBSCAN")
             clustering = Clustering_agences(new_filepath = clustering_filepath, filepath = clean_filepath,
-                                            already_created = args.already_created) # A compléter...
-            clustering.agreg_clustering()
+                                            already_created = args.already_created)
+            if not args.pca:
+                print("Lancement du clustering sans PCA par défaut: ")
+                clustering.agreg_clustering()
+            else:
+                clustering.agreg_clustering(pca = args.pca)
             print("Clustering terminé!")
 
     except Exception as e:
