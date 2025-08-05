@@ -8,8 +8,8 @@ import itertools
 from scipy.cluster.hierarchy import linkage, dendrogram, fcluster, cophenet
 from scipy.spatial.distance import pdist
 from sklearn.cluster import DBSCAN, KMeans
-from Code_analyse_OOP import DataCharger, BasicStats
-from sklearn.preprocessing import StandardScaler
+from Code_analyse_OOP_term import DataCharger, BasicStats
+from sklearn.preprocessing import StandardScaler, RobustScaler
 from sklearn.decomposition import PCA
 from typing import Optional
 from sklearn.metrics import silhouette_score
@@ -61,18 +61,22 @@ class Clustering_agences:
         if not os.path.exists(self.filepath):
             raise FileNotFoundError(f"Aucun fichier trouvé à l'adresse {self.filepath}")
         dataset = DataCharger(self.filepath) # Chargement des données complètes nettoyées
-        dataset.preparer_donnees()
-        dataset = dataset.dataset  # Récupération du DataFrame
+        dataset = dataset.preparer_donnees()[0]  # Peut-être pas besoin...
         if dataset is None or dataset.empty:
             raise ValueError("Le dataset chargé est vide")
         if dataset.index is None or dataset.index.empty:
             raise ValueError("Le dataset ne contient pas d'index")
-        liste_agences = dataset.index.tolist()
+        liste_agences = sorted(dataset.index.unique().tolist())
         lignes  = []
         for agence in liste_agences:
             try:
                 class_data = DataCharger(filepath = self.filepath, code = agence, annee = 2024)
+                class_data.assignation_simple()
+                print(f"Agence {agence} — class_data type: {type(class_data)}")  # Débogage
+                if hasattr(class_data, 'data'):
+                    print(f"Agence {agence} — class_data.data type: {type(class_data.data)}")
                 data_agence = BasicStats(class_data)
+                print(f"Agence {agence} — data_agence.data type: {type(data_agence.data)}")
                 lignes.append(data_agence.data_retrieval_clustering())
             except Exception as e:
                 print(f"Erreur lors du chargement des données de l'agence {agence} : {e}")
@@ -166,13 +170,17 @@ class Clustering_agences:
         plt.show()   # On visualise les corrélations potentielles pour éviter trop de features
 
 
-    def scaling_data(self):
-          '''Normalisation des données avec StandardScaler pour le clustering'''
+    def scaling_data(self, robust: Optional[bool] = False):
+        '''Normalisation des données avec StandardScaler pour le clustering'''
 
-          self.check_data()
-          scaler = StandardScaler()
-          data_scaled = scaler.fit_transform(self.data)
-          self.data_scaled = pd.DataFrame(data_scaled, columns = self.data.columns, index = self.data.index)
+        self.check_data()
+        if robust:
+            scaler = StandardScaler()
+            data_scaled = scaler.fit_transform(self.data)
+        else:
+            scaler = RobustScaler()
+            data_scaled = scaler.fit_transform(self.data)
+        self.data_scaled = pd.DataFrame(data_scaled, columns = self.data.columns, index = self.data.index)
 
 
     def remove_feature(self, column):
@@ -336,7 +344,7 @@ class Clustering_agences:
         # Choix de la colonne et vérification de la présence dans les données
         self.check_data(True, pca)
         data_used = self.applied_pca if pca else self.data
-        col_name = "cluster_kmeans_pca" if data_used == self.applied_pca else "cluster_kmeans"
+        col_name = "cluster_kmeans_pca" if data_used is self.applied_pca else "cluster_kmeans"
         if col_name not in data_used.columns:
             raise ValueError(f"Les données ne contiennent pas la colonne {col_name}")
         clusters = data_used.groupby(col_name)
@@ -346,7 +354,7 @@ class Clustering_agences:
         for cid, group in clusters
         ]
         # Affichage des clusters
-        plt.figure(figsize=(12, 6))
+        plt.figure(figsize=(14, 12))
         squarify.plot(sizes=sizes, label=labels, alpha=0.8)
         plt.axis('off')
         plt.title(f"Treemap des clusters kmeans {'(avec PCA)' if pca else '(sans PCA)'} et agences associées")
@@ -396,8 +404,11 @@ class Clustering_agences:
         labels = fcluster(Z, t = threshold_distance, criterion = 'distance')
         nb_clusters = len(set(labels))
         print(f"Nombre optimal estimé de clusters hiérarchiques: {nb_clusters}")
-        score = silhouette_score(data_used, labels)
-        print("Silhouette score pour hierarchical clustering, (méthode = {method}, nb_clusters = {nb_clusters}): {score}")
+        if nb_clusters >= 2:
+            score = silhouette_score(data_used, labels)
+        else: 
+            score = None
+        print(f"Silhouette score pour hierarchical clustering, (méthode = {method}, nb_clusters = {nb_clusters}): {score}")
         self.hierarchical_best_max_clusters = nb_clusters
         return nb_clusters, labels, threshold_distance, score
     
@@ -434,7 +445,10 @@ class Clustering_agences:
         else:
             self.data["cluster_hierarchical"] = labels
             group_cluster_hierarchical = self.data.groupby("cluster_hierarchical")
-        final_score = silhouette_score(data_used, labels)
+        if len(set(labels)) >= 2:
+            final_score = silhouette_score(data_used, labels)
+        else:
+            final_score = None
         print(f"Silhouette score atteint (pour méthode = {method}, nb_cluster = {max_cluster}): {final_score}")
         for cluster_id, group in group_cluster_hierarchical:  # renvoie une liste des clusters avec les agences
             print(f"\nCluster {cluster_id}: ")
@@ -458,7 +472,7 @@ class Clustering_agences:
         f"Cluster {cid}\n" + "\n".join(group.index.astype(str).tolist())
         for cid, group in clusters
         ]
-        plt.figure(figsize = (12,6))
+        plt.figure(figsize = (14,12))
         squarify.plot(sizes = sizes, label = labels, alpha = 0.8)
         plt.axis('off')
         plt.title("Treemap des clusters hiérarchiques et de leurs agences")
@@ -482,6 +496,7 @@ class Clustering_agences:
         k_distances = np.sort(distances[:,-1])
         # Plot du graphe:
         plt.figure(figsize = (8,5))
+        plt.plot(k_distances)
         plt.title(f"k-distance graph pour k = {min_samples}")
         plt.xlabel("Points triés")
         plt.ylabel(f"Distance au {min_samples} plus proche voisin")
@@ -556,7 +571,7 @@ class Clustering_agences:
             if pca:
                 membres = data_used[data_used["cluster_dbscan_pca"] == cluster_id].index.tolist()  # Liste des membres pour un cluster donné
             else:
-                membres = data_used[data_used["cluster_dbscan"] == cluster_id].index.tolist()
+                membres = self.data[self.data["cluster_dbscan"] == cluster_id].index.tolist()
             nom = "Bruit" if cluster_id == -1 else f"Cluster {cluster_id}"
             print(f"{nom} : {membres}")
         # Calcul du silhouette_score:
@@ -583,7 +598,7 @@ class Clustering_agences:
         labels = [f"Cluster {cid}" if cid != -1 else "Bruit"
                   + '\n' + '\n'.join(group.index.astype(str).tolist())
                   for cid, group in clusters]
-        plt.figure(figsize = (12,6))
+        plt.figure(figsize = (14,12))
         squarify.plot(sizes = sizes, label = labels, alpha = 0.8)
         plt.axis('off')
         plt.title("Treemap des clusters DBSCAN et agences associées")
@@ -653,13 +668,18 @@ class Clustering_agences:
 
 
     def agreg_clustering(self, pca : Optional[bool] = False,
-                         best : Optional[bool] = True):  # A compléter pour obtenir une méthode d'analyse
+                         best : Optional[bool] = True, robust: Optional[bool] = True):  # A compléter pour obtenir une méthode d'analyse
         '''Méthode qui applique les 3 clusters aux données construites'''
 
         if not self.already_created:
             self.remplissage_data()
             self.save_data(self.new_filepath)
+        else:
+            self.load_data()
         self.remove_highly_correlated()
+        if pca:
+            self.scaling_data(robust = robust)
+            self.apply_PCA(var_kept = 0.95)
         self.apply_kmeans(pca)
         self.apply_hierarchical_clustering(pca = pca, best = best)
         self.apply_dbscan(pca = pca, best = best)
@@ -696,7 +716,7 @@ class Clustering_agences:
         '''Application des différentes méthodes pour le clustering DBSCAN'''
 
         self.check_before_apply()
-        self.plot_k_distance(pca)
+        self.plot_k_distance(min_samples = 5, pca = pca)
         self.calib_params_dbscan(eps_range, min_samples_range, verbose, pca)
         self.clustering_dbscan(pca = pca, best = best)
         self.treemap_clusters_dbscan(pca)

@@ -118,6 +118,7 @@ class PreprocessingRawData:
         '''Création de la colonne 'date_heure_operation' en Datetime (pour filtrer sur les dates)'''
 
         # On retire les observations manquantes:
+        print("Version modifiée de time_format exécutée")  # Pour vérification...
         self.check_not_None()
         nb_avant = self.data.shape[0]
         self.data = self.data.dropna(subset = ["date_operation"])
@@ -128,7 +129,15 @@ class PreprocessingRawData:
         self.check_missing_columns(columns)
         # Conversion et vérification:
         self.data["date_operation"]=  pd.to_datetime(self.data["date_operation"]).dt.normalize()
-        self.data["heure_operation"] = pd.to_timedelta(self.data["heure_operation"].astype('str') + ':00')
+
+        def format_heure(h):  # Pour gérer les données factices
+            h_str = str(h)
+            if ":" in h_str:
+                return h_str
+            h_str = h_str.zfill(6)
+            return f"{h_str[:2]}:{h_str[2:4]}:{h_str[4:]}"
+        self.data["heure_operation"] = self.data["heure_operation"].apply(format_heure)
+        self.data["heure_operation"] = pd.to_timedelta(self.data["heure_operation"].astype('str'))
         self.data["date_heure_operation"] = self.data["heure_operation"] + self.data["date_operation"]
         if not pd.api.types.is_datetime64_any_dtype(self.data["date_heure_operation"]):
             raise TypeError("'date_heure_operation n'est pas un datetime")
@@ -204,11 +213,11 @@ class PreprocessingRawData:
 
         # Vérifications preliminaires:
         self.check_not_None()
-        columns = ["etat_origine_operation", "application_origine_operation"]
+        columns = ["etat_operation", "application_origine_operation"]
         self.check_missing_columns(columns)
         print("Nombre d'observations avant filtrage: ", self.data.shape[0])
         # Filtrage sur 'etat_origine_operation':
-        self.data = self.data[self.data["etat_origine_operation"] == 2]
+        self.data = self.data[self.data["etat_operation"] == 2]
         print("Nombre d'observations après filtrage sur la colonne 'etat_operation' :", self.data.shape[0])
         # Filtrage sur 'etat_origine_operation':
         self.data = self.data[self.data["application_origine_operation"] == 'OA']
@@ -239,7 +248,7 @@ class PreprocessingRawData:
         self.check_not_None()
         columns = ['identifiant_compte', 'reference_operation', 'code_marche', 'etat_operation', 
         'code_famille_operation', 'code_type_operation', 'application_origine_operation', 'motif_operation', 'devise', 'numero_caisse',
-        'heure_operation', 'date_operation', 'date_valeur', 'code_banque']
+        'heure_operation', 'date_operation', 'code_banque', 'date_valeur'] 
         self.check_missing_columns(columns)
         # Abandon des colonnes inutiles:
         print("Nombre de colonnes avant traitement :", self.data.shape[1])
@@ -290,11 +299,19 @@ class PreprocessingRawData:
 
 
 
+
+
+
+
 # Classe de chargement des données utiles à l'analyse:
 
 class DataCharger:
 
-    def __init__(self, filepath : str = None, code : list[int] = None, annee: list[int]= None, choice = None):
+    def __init__(self, filepath : str = None, code : list[int] = None, annee: list[int]= None, choice : Optional[int] = None):
+        '''Constructeur de la classe DataCharger'''
+
+        # Pour info, on met choice par défaut = 1 si rien n'est spécifié
+        # Cela permet de laisser passer l'ensemble du dataset, sans sélection préalable.
         self.filepath = filepath
         self.year = annee
         self.code = code
@@ -333,7 +350,7 @@ class DataCharger:
 
 
     def check_data(self, check_dataset : Optional[bool] = True,
-                    check_data: Optional[bool] = True, allow_empty: Optional[bool] = False):
+                    check_data: Optional[bool] = False, allow_empty: Optional[bool] = False):
         '''Vérification de l'existence des données'''
 
         if check_dataset:
@@ -376,7 +393,7 @@ class DataCharger:
     def verif_vides(self):
         '''Enlève les observations avec des valeurs vides'''
 
-        self.check_data()
+        self.check_data(check_data = False)
         for column in self.dataset.columns:
             if self.dataset[column].isna().any():
                 print(f"La colonne {column} contient des valeurs manquantes")
@@ -389,7 +406,7 @@ class DataCharger:
         '''Vérification de l'encodage des colonnes importantes (en particulier pour les dates)'''
         
         # On commence par vérifier que les colonnes sont bien présentes dans le dataset:
-        self.check_data()
+        self.check_data(check_data = False)
         columns = ["date_heure_operation", "libelle_long_operation",
                          "libelle_court_operation", "identifiant_operation"]
         self.check_missing_columns(columns)
@@ -408,7 +425,7 @@ class DataCharger:
     def completion_data(self):  
         '''Ajout de colonnes nécessaires au traitement des données (notamment les flux)'''
 
-        self.check_data()
+        self.check_data(check_data = False)
         columns = ["date_heure_operation", "montant_operation"]
         self.check_missing_columns(columns)
         self.dataset["jour"] = self.dataset["date_heure_operation"].dt.date
@@ -420,7 +437,7 @@ class DataCharger:
     def change_assignation(self, agence : Optional[List[int]] = None, annee : Optional[List[int]] = None, choice : Optional[int] = None):
         '''Pour changer le choix de l'assignation des données'''
 
-        self.check_data()
+        self.check_data(check_data = False)
         if not any([agence, annee, choice]):
             raise ValueError("Au moins l'un des arguments ('agence', 'annee', 'agence') doit être renseigné correctement")
         if agence:
@@ -446,7 +463,7 @@ class DataCharger:
     def nb_agences_annees_dataset(self):
         '''Affiche le nombre d'agences présentes dans les données'''
 
-        self.check_data()
+        self.check_data(check_data = False)
         nb_agences = self.dataset.index.nunique()
         print("Le nombre d'agences présentes dans le dataset complet est de :", nb_agences)
         annee_min = self.dataset["date_heure_operation"].dt.year.min()
@@ -457,7 +474,7 @@ class DataCharger:
     def liste_annees_agences_data(self):  
         '''Renvoie la liste des agences et des années disponibles dans le dataset complet'''
 
-        self.check_data()
+        self.check_data(check_data = False)
         columns = ["date_heure_operation"]
         self.check_missing_columns(columns)
         try:
@@ -472,7 +489,7 @@ class DataCharger:
 
     def selection_agence(self):
 
-        self.check_data()
+        self.check_data(check_data = False)
         if self.code:
             self.code = self.code if isinstance(self.code,list) else [self.code]
             self.data_agence = self.dataset.loc[self.dataset.index.isin(self.code)].copy()
@@ -498,22 +515,24 @@ class DataCharger:
             self.grouped = dict(tuple(self.dataset.groupby("code_agence")))
         print("Le dataset grouped qui groupe les données par agence a bien été créé, et est disponible dans l'argument self.grouped")
 
-    def assignation_donnee(self):
+    def assignation_donnee(self):  # A modifier pour prendre en compte le fait qu'on peut ne renvoyer que le dataset complet
+        # Il ne faut filtrer sur self.choice qu'après avoir filtré sur l'agence
+        # On considère self.choice comme un choix par défaut (ou pas, on peut faire les deux)
         if self.choice:
-            match self.choice:
-                case 1:
-                    self.data = self.dataset
-                case 2:
-                    self.data = self.data_agence
-                case 3:
-                    self.data = self.data_years
+            if self.choice == 1:
+                self.data = self.dataset
+            if self.choice == 2:
+                self.data = self.data_agence
+            elif self.choice == 3:
+                self.data = self.data_years
         else:
             if self.year:
                 self.data = self.data_years
             elif self.code:
                 self.data = self.data_agence
             else:
-                self.data = self.dataset
+                self.data = self.dataset  # En fait si, on prend bien self.dataset par défaut ici...
+        self.data = self.data.sort_index()
         self.data = self.data.sort_values("date_heure_operation")
         print("Les données correspondantes ont bien été chargées et triées dans self.data")
         print("N.B.: Le choix des données peut toujours être modifié à l'aide de la méthode 'change_assignation' avec le paramètre other_choice")
@@ -522,14 +541,18 @@ class DataCharger:
     
 
     def assert_assign_data(self):
-        assert isinstance(self.code, list), "self.code n'est pas spécifié ou pas dans le bon format"
-        assert isinstance(self.year, list), "self.year n'est pas spécifié ou pas dans le bon format"
-        agences_data = self.data.index.tolist()
-        agences_invalides = [agence for agence in agences_data if agence not in self.code]
-        assert not agences_invalides, f"Agences invalides après filtrage trouvées: {agences_invalides}"
-        annees_data = self.data["date_heure_operation"].dt.year.tolist()
-        annees_invalides = [annee for annee in annees_data if annee not in self.year]
-        assert not annees_invalides, f"Années invalides après filtrage trouvées: {annees_invalides}"
+        if self.code is not None: 
+            assert isinstance(self.code, list), "self.code n'est pas spécifié ou pas dans le bon format"
+            agences_data = self.data.index.tolist()
+            agences_invalides = [agence for agence in agences_data if agence not in self.code]
+            if agences_invalides:
+                raise ValueError(f"Agences invalides trouvées après filtrage: {agences_invalides}")
+        if self.year is not None:
+            assert isinstance(self.year, list), "self.year n'est pas spécifié ou pas dans le bon format"
+            annees_data = self.data["date_heure_operation"].dt.year.tolist()
+            annees_invalides = [annee for annee in annees_data if annee not in self.year]
+            if annees_invalides:
+                raise ValueError(f"Années invalides trouvées après filtrage: {annees_invalides}")
         print("Les données ont été correctement filtrées selon le choix de l'utilisateur.")
 
     def visu_data(self):
@@ -569,8 +592,21 @@ class DataCharger:
         self.selection_annee()
         self.assignation_donnee()
         self.assert_assign_data()
-        return self.assignation_donnee()
+        return self.dataset, self.assignation_donnee()
         
+
+    def assignation_simple(self):
+        '''Simple chargement des données pour passer à la classe suivante'''
+
+        self.load_csv()
+        self.verif_vides()
+        self.verif_encodage()
+        self.completion_data()
+        self.change_assignation(agence = self.code, annee = self.year)
+        self.assert_assign_data()
+        return self.data
+
+
 
 
 
@@ -589,8 +625,7 @@ class BasicStats:
         # self.semaines = [f"Semaine {i}" for i in range(1,self.data["date_heure_operation"].dt.isocalendar().week.max() + 1)]
         self.trimestres = ["1er trimestre", "2ème trimestre", "3ème semestre", "4ème semestre"]
         self.type_periode = {"month": self.mois_possibles, "season": self.saisons,
-                             "semester": self.semestres, "quarter": self.trimestres,
-                             "week": self.semaines}
+                             "semester": self.semestres, "quarter": self.trimestres}
  
     @property
     def data(self):
@@ -613,6 +648,7 @@ class BasicStats:
             raise ValueError("Il faut d'abord commencer par initialiser self.data")
         else:
             self.semaines = [f"Semaine {i}" for i in range(1,self.data["date_heure_operation"].dt.isocalendar().week.max() + 1)]
+            self.type_periode["week"] = self.semaines
         # Pb: le calcul des semaines s'appuie sur self.data
 
 
@@ -880,8 +916,8 @@ class BasicStats:
         retraits = self.data[self.data["débit"] != 0]["débit"]
         versements = self.data[self.data["crédit"] != 0]["crédit"]
         max_val = min(retraits.max(), versements.max())   # Quitte à couper, on conserve la plus petite pour visualiser
-        sns.histplot(retraits, bins=nb_bins, kde=False, color='red', label="Retraits", alpha=0.5)
-        sns.histplot(versements, bins=nb_bins, kde=False, color='green', label="Versements", alpha=0.5)
+        sns.histplot(retraits, bins=nb_bins, kde=False, color='red', label="Retraits", alpha=0.2)
+        sns.histplot(versements, bins=nb_bins, kde=False, color='green', label="Versements", alpha=0.2)
         plt.xlim(0, max_val)
         plt.xlabel("Montant")
         plt.ylabel("Nombre d'opérations")
@@ -1067,7 +1103,7 @@ class BasicStats:
             minorant = quant_99 - 100000
             if minorant < 0:
                 minorant = quant_99
-        liste_seuils = np.linspace(minorant, quant_99 + 1000000, 25000)
+        liste_seuils = np.arange(minorant, quant_99 + 1000000, 50000)
         results = []
         for seuil in liste_seuils:
             proba_estimee = self.calcul_proba_rupture(seuil, n_iter=n_iter, ci=ci)
@@ -1123,8 +1159,11 @@ class BasicStats:
             print(f"Nombre de retraits importants (supérieurs à {self.seuil}) pour l'agence {self.agence} en {self.year}: ", nb_retraits_imp)
             return dict_retraits_imp
 
-    def distribution_retraits_imp(self):
+    def distribution_retraits_imp(self):   # Renforcer la robustesse de la fonction
         dict_requis = self.retraits_imps()
+        if not dict_requis:
+            print(f"Aucun retrait détecté supérieur au seuil fourni {self.seuil}")
+            return
         plot_retraits_imps = pd.DataFrame([
             {'date': pd.to_datetime(date), 'somme_retraits_imps_jour': sum(montants), "nombre_retraits_imp_jour": nb}
             for date, (nb,montants) in dict_requis.items()
@@ -1160,13 +1199,13 @@ class BasicStats:
         return count, freq
 
     def meshgrid_threshold(self):
-        mesh = [threshold for threshold in np.linspace(100000,1500000,100000)]
+        mesh = [threshold for threshold in np.arange(100000,1500000,100000)]
         for threshold in mesh:
             self.count_freq_above(threshold)
         print("Fin de l'exploration")
 
     def custom_meshgrid_threshold(self, limit_1 : int, limit_2 : int, jump : int):
-        mesh = [threshold for threshold in np.linspace(limit_1,limit_2,jump)]
+        mesh = [threshold for threshold in np.arange(limit_1,limit_2,jump)]
         for threshold in mesh:
             self.count_freq_above(threshold)
         print("Fin de l'exploration")
@@ -1216,8 +1255,8 @@ class BasicStats:
         quantiles_retraits = self.quantiles_retraits()
         result_quant_95 = self.count_freq_above(quantiles_retraits["quant_95"])
         result_quant_99 = self.count_freq_above(quantiles_retraits["quant_99"])
-        dict_agence["Moy_nb_versements_j"] = result_nb["moy_versements_j"]
-        dict_agence["Moy_nb_retraits_j"] = result_nb["moy_retraits_j"]
+        dict_agence["Moy_nb_versements_j"] = result_nb["moy_nb_versements_j"]
+        dict_agence["Moy_nb_retraits_j"] = result_nb["moy_nb_retraits_j"]
         dict_agence["Moy_versements_j"] = result_quant["moy_versements_j"]
         dict_agence["Moy_retraits_j"] = result_quant["moy_retraits_j"]
         dict_agence["Median_nb_versements_j"] = result_nb["median_nb_versements_j"]
@@ -1229,7 +1268,7 @@ class BasicStats:
         dict_agence["Std_versements_j"] = result_quant["std_versements_j"]
         dict_agence["Std_retraits_j"] = result_quant["std_retraits_j"]
         dict_agence[f"Nb_clients_{self.year}"] = self.nb_clients_annee()
-        dict_agence["Nb_moy_transactions_j"] = result_nb["obs_j"].mean()
+        dict_agence["Nb_moy_transactions_j"] = result_nb["moy_obs_j"].mean()
         dict_agence["Nb_retraits_sup_quant_95"] = result_quant_95[0]
         dict_agence["Nb_retraits_sup_quant_99"] = result_quant_99[0]
         dict_agence["Freq_retraits_sup_quant_95"] = result_quant_95[0]
@@ -1241,7 +1280,7 @@ class BasicStats:
     
     # Pb: On conserve beaucoup de features. Il faudra surement faire un tri avant de clusteriser
     # ou appliquer une méthode de réduction de dimension (type PCA...).
-    # Rajouter des vérifications (dans init / load_data / load_raw_csv)
     # Rajouter des docstrings
     # Utiliser logging au lieu de print (il reste encore du boulot...)
     # Vérifier l'encodage des semaines (une fois que self.data est défini)
+    # Implémenter une méthode pour le calcul empirique du seuil optimal
