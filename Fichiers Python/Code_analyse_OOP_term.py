@@ -900,12 +900,12 @@ class BasicStats:
 
     def distribution_flux(self, nb_bins: int = 30):
         flux = self.data.groupby("jour")["flux_net"].last()
-        plt.figure(figsize = (14,12))
+        min_flux = flux.min()
         max_flux = flux.max()
-        plt.figure(figsize=(14, 10))
+        plt.figure(figsize=(14, 12))
         sns.histplot(flux, bins=nb_bins, kde=False, color='#40E0D0')
         plt.title(f"Distribution du flux net journalier pour l'agence {self.agence} (en {self.year})")
-        plt.xlim(0, max_flux + 1000) # On se laisse une petite marge quand même 
+        plt.xlim(min_flux - 1000, max_flux + 1000) # On se laisse une petite marge quand même 
         plt.xlabel("Flux net journalier")
         plt.ylabel("Nombre de jours")
         plt.grid(True)
@@ -1117,13 +1117,35 @@ class BasicStats:
             df_resultats["CI_rupt"].apply(lambda x: x[1]) - y_rupt
             ])
         y_tranq = df_resultats["proba_tranq_estimee"]
+        seuil_tranq_90 = df_resultats[y_tranq >= 0.90]["seuil"].min()
+        seuil_tranq_95 = df_resultats[y_tranq >=0.95]["seuil"].min()
         yerr_tranq = np.array([
             y_tranq - df_resultats["CI_norm"].apply(lambda x: x[0]),
             df_resultats["CI_norm"].apply(lambda x: x[1]) - y_tranq
             ])
-        fig, axs = plt.subplots(1, 2, figsize=(18, 8), sharex=True)
+        fig, axs = plt.subplots(1, 2, figsize=(12, 10), sharex=True)
+        if not pd.isna(seuil_tranq_90):
+            axs[0].axvline(seuil_tranq_90, color='blue', linestyle='--', linewidth=2,
+                   label=f"Tranquillité ≥ 90% ({int(seuil_tranq_90)})")
+            axs[1].axvline(seuil_tranq_90, color='blue', linestyle='--', linewidth=2)
+        if not pd.isna(seuil_tranq_95):
+            axs[0].axvline(seuil_tranq_95, color='red', linestyle='--', linewidth=2,
+                   label=f"Tranquillité ≥ 95% ({int(seuil_tranq_95)})")
+            axs[1].axvline(seuil_tranq_95, color='red', linestyle='--', linewidth=2)
         axs[0].errorbar(seuils, y_rupt, yerr=yerr_rupt, fmt='o', color='darkred',
                     ecolor='lightcoral', capsize=3, label="Proba de rupture")
+        if not pd.isna(seuil_tranq_90):
+            axs[1].annotate(f"{int(seuil_tranq_90)}",
+                    xy=(seuil_tranq_90, 0.92),
+                    xytext=(seuil_tranq_90 + 10000, 0.92),
+                    arrowprops=dict(arrowstyle='->', color='blue'),
+                    fontsize=10, color='blue')
+        if not pd.isna(seuil_tranq_95):
+            axs[1].annotate(f"{int(seuil_tranq_95)}",
+                    xy=(seuil_tranq_95, 0.97),
+                    xytext=(seuil_tranq_95 + 10000, 0.97),
+                    arrowprops=dict(arrowstyle='->', color='red'),
+                    fontsize=10, color='red')
         axs[0].set_xlabel("Seuil de départ")
         axs[0].set_ylabel("Probabilité de rupture")
         axs[0].set_title(f"Probabilité de rupture – Agence {self.agence} ({self.year})")
@@ -1137,6 +1159,12 @@ class BasicStats:
         axs[1].set_title(f"Probabilité de tranquillité – Agence {self.agence} ({self.year})")
         axs[1].grid(True)
         axs[1].legend()
+
+        seuils = seuils.to_list()
+        axs[0].set_xticks(seuils)
+        axs[1].set_xticks(seuils)
+        axs[0].tick_params(axis='x', rotation=45)
+        axs[1].tick_params(axis='x', rotation=45)
         plt.tight_layout()
         plt.show()
 
