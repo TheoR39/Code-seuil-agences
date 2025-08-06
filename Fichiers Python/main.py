@@ -2,8 +2,10 @@ import os
 os.environ["OMP_NUM_THREADS"] = "1"
 
 import argparse
-from Code_analyse_OOP_term import PreprocessingRawData, DataCharger, BasicStats
-from Clustering_agences import Clustering_agences
+from BasicStats_Class import BasicStats
+from Preprocessing_Class import PreprocessingRawData
+from Clustering_Class import Clustering_agences
+from DataCharger_Class import DataCharger
 
 # Attention, il faut adapter les chemins d'accès suivant l'endroit de stockage des données
 # Il faudrait changer les args par des fonctions avec argument pour automatiser avec Streamlit (par exemple)
