@@ -9,3 +9,14 @@ Templates/
 /Data/
 
 .vscode
+
+# === Ignore les scripts Powershell ===
+*.ps1
+
+# === Ignore les scripts Bash ===
+*.sh
+
+# === Ignore certains fichiers Python (trop volumineux) ===
+Code_analyse_OOP.py  
+Code_analyse_OOP_term.py 
+
