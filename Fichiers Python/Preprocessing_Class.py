@@ -43,7 +43,7 @@ class PreprocessingRawData:
             filepaths = self.filepath
         list_dfs = []
         for filepath in filepaths:
-            df = pd.read_csv(filepath)
+            df = pd.read_csv(filepath, low_memory = False, on_bad_lines = 'skip')
             df = df.sort_values("code_agence")  # On pourrait rajouter une vérif
             list_dfs.append(df)
             print(f"Données chargées depuis {filepath}")
@@ -130,13 +130,24 @@ class PreprocessingRawData:
         self.data["date_operation"]=  pd.to_datetime(self.data["date_operation"]).dt.normalize()
 
         def format_heure(h):  # Pour gérer les données factices
-            h_str = str(h)
+            h_str = str(h).strip()
+            if not h_str or h_str.lower() == 'nan':
+                return None
             if ":" in h_str:
-                return h_str
+                parts = h_str.split(":")
+                if len(parts) == 2:
+                    return f"{parts[0].zfill(2)}:{parts[1].zfill(2)}:00"
+                elif len(parts) == 3:
+                    return f"{parts[0].zfill(2)}:{parts[1].zfill(2)}:{parts[2].zfill(2)}"
+                else:
+                    return None
             h_str = h_str.zfill(6)
-            return f"{h_str[:2]}:{h_str[2:4]}:{h_str[4:]}"
+            return f"{h_str[:2]}:{h_str[2:4]}:{h_str[4:6]}"
         self.data["heure_operation"] = self.data["heure_operation"].apply(format_heure)
-        self.data["heure_operation"] = pd.to_timedelta(self.data["heure_operation"].astype('str'))
+        self.data["heure_operation"] = pd.to_timedelta(self.data["heure_operation"], errors = 'coerce')
+        nb_invalid = self.data["heure_operation"].isna().sum()
+        if nb_invalid > 0:
+            print(f"Attention: {nb_invalid} lignes ont une heure non convertible (valeurs mises à NaT)")
         self.data["date_heure_operation"] = self.data["heure_operation"] + self.data["date_operation"]
         if not pd.api.types.is_datetime64_any_dtype(self.data["date_heure_operation"]):
             raise TypeError("'date_heure_operation n'est pas un datetime")
@@ -162,6 +173,20 @@ class PreprocessingRawData:
         # Visualisation après transformation:
         print("Visualisation des données après algébrisation des montants (regarder la colonne montant_operation): ")
         print(self.data.head())
+
+    
+    def rectify_currency(self):
+        '''Prend un taux moyen de conversion de 10 pour rectifier les observations non MAD'''
+
+        self.check_not_None()
+        columns = ["devise"]
+        self.check_missing_columns(columns)
+        mask = self.data["devise"] != 'MAD'
+        if self.data.loc[mask].empty:
+            print("Aucune observation à changer")
+        else:
+            self.data.loc[mask, "montant_operation"] *= 10
+            print(f"{mask.sum()} observations corrigées.")
 
 
     def check_currency(self):
@@ -320,6 +345,7 @@ class PreprocessingRawData:
         print("Données nettoyées enregistrées au format csv")
 
 
+
     def preprocessing(self):
         '''Agglomère les différentes fonctions pour un preprocessing global (et complet)'''
 
@@ -332,10 +358,32 @@ class PreprocessingRawData:
         self.algebrisation_montants()
         self.filtre_etat_origine_operation()
         self.filtre_type_operation()
-        # if self.check_currency():   # A modifier pour prendre une fonction plus simple
-        #     saisie = input("Insérez ici la liste des valeurs des taux de change appropriés pour les dates et les devises données, séparés par une virgule :")
-        #     taux =  [float(elem.strip()) for elem in saisie.split(',')]
-        #     self.change_currency(taux)
+        self.rectify_currency()
+        self.remove_columns()
+        self.verif_vides()
+        self.verif_encodage()
+        self.completion_data()
+        if not self.newfilepath:
+            raise ValueError("Aucun chemin de sauvegarde spécifié")
+        self.save_cleaned_data(self.newfilepath)
+
+
+    def preprocessing_precise(self):
+        '''Agglomère les différentes fonctions pour un preprocessing global (et complet)'''
+
+        self.load_raw_csv()
+        self.describe_data()
+        self.info_data()
+        self.visu_data()
+        self.remove_duplicates()
+        self.time_format()
+        self.algebrisation_montants()
+        self.filtre_etat_origine_operation()
+        self.filtre_type_operation()
+        if self.check_currency():   # A modifier pour prendre une fonction plus simple
+            saisie = input("Insérez ici la liste des valeurs des taux de change appropriés pour les dates et les devises données, séparés par une virgule :")
+            taux =  [float(elem.strip()) for elem in saisie.split(',')]
+            self.change_currency(taux)
         self.remove_columns()
         self.verif_vides()
         self.verif_encodage()

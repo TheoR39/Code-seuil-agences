@@ -8,7 +8,8 @@ import itertools
 from scipy.cluster.hierarchy import linkage, dendrogram, fcluster, cophenet
 from scipy.spatial.distance import pdist
 from sklearn.cluster import DBSCAN, KMeans
-from Code_analyse_OOP_term import DataCharger, BasicStats
+from DataCharger_Class import DataCharger
+from BasicStats_Class import BasicStats
 from sklearn.preprocessing import StandardScaler, RobustScaler
 from sklearn.decomposition import PCA
 from typing import Optional
@@ -66,7 +67,9 @@ class Clustering_agences:
             raise ValueError("Le dataset chargé est vide")
         if dataset.index is None or dataset.index.empty:
             raise ValueError("Le dataset ne contient pas d'index")
-        liste_agences = sorted(dataset.index.unique().tolist())
+        if 'code_agence' not in dataset.columns:
+            raise ValueError("'code_agence' n'est pas présent dans les colonnes du dataset")
+        liste_agences = sorted(dataset['code_agence'].dropna().unique().tolist())
         lignes  = []
         for agence in liste_agences:
             try:

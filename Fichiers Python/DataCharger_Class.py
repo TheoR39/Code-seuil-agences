@@ -178,6 +178,7 @@ class DataCharger:
         self.check_missing_columns(["date_heure_operation"], source = 'dataset')
         if not self.year:
             print("Aucune année sélectionnée: self.year est vide")
+            return
         if not isinstance(self.year, list):
             self.year = [self.year]
         try:
@@ -205,6 +206,9 @@ class DataCharger:
     def assignation_donnee(self): 
         '''Méthode pour assigner la donnée voulue à self.data'''
 
+        print(f"[DEBUG] assignation_donnee() -> choice: {self.choice}, code: {self.code}, year: {self.year}")
+        print(f"[DEBUG] self.dataset: {type(self.dataset)}, self.data_agence: {type(self.data_agence)}, self.data_years: {type(self.data_years)}")
+
         if self.choice:
             if self.choice == 1:
                 self.data = self.dataset
@@ -222,8 +226,10 @@ class DataCharger:
                 self.data = self.data_agence
             else:
                 self.data = self.dataset  # Choix par défaut
-        self.data = self.data.reset_index(inplace = True)
-        self.data = self.data.sort_values(by = ["code_agence","jour", "date_heure_operation"])
+        if self.data is None:
+            raise ValueError("self.data est None : aucune donnée assignée à self.data !")
+        self.data.reset_index(inplace = True)
+        self.data = self.data.sort_values(by = ["code_agence","jour","date_heure_operation"])
         self.data.set_index("code_agence", inplace = True)  # On s'assure du bon tri
         print("Les données correspondantes ont bien été chargées et triées dans self.data")
         print("N.B.: Le choix des données peut toujours être modifié à l'aide de la méthode 'change_assignation' avec le paramètre other_choice")
