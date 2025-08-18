@@ -54,7 +54,7 @@ class Clustering_agences:
         self.dbscan_best_score = None  # Stockage du silhouette score pour le meilleur DBSCAN
 
 
-    def remplissage_data(self): 
+    def remplissage_data_clustering(self): 
         '''Critique: création des données nécessaires aux algos de clustering'''
 
         if not hasattr(self,'filepath') or not isinstance(self.filepath, str):
@@ -675,7 +675,7 @@ class Clustering_agences:
         '''Méthode qui applique les 3 clusters aux données construites'''
 
         if not self.already_created:
-            self.remplissage_data()
+            self.remplissage_data_clustering()
             self.save_data(self.new_filepath)
         else:
             self.load_data()

@@ -268,6 +268,8 @@ class BasicStats:
             print(f"Quantile {value} pour les retraits: ", new_quantile_retrait)
             print(f"Quantile {value} pour les versements: ", new_quantile_versement)
             print(f"Quantile {value} pour les flux journaliers: ", new_quantile_flux)
+            return {"quant_retrait": new_quantile_retrait, "quant_versement": new_quantile_versement,
+                    "quant_flux": new_quantile_flux}
 
 
 # Méthodes pour visualiser les distributions (retraits, versements, flux nets) sur l'année:
@@ -461,6 +463,8 @@ class BasicStats:
     
     
     def calcul_proba_rupture(self, seuil : float, n_iter: int = 1000, ci : float = 0.95):
+        '''Fonction qui permet d'estimer la probabilité de rupture de l'agence à un seuil donné'''
+
         flux_seuil = self.data.groupby("jour")["flux_net"].last() + seuil
         n_jour = self.nb_obs_jour()["j_ouvres"]
         ruptures = []   # On va évaluer 1000 fois la proba de rupture par Bootstrap
@@ -493,6 +497,9 @@ class BasicStats:
     
 
     def plot_seuil_proba_rupture(self, n_iter: int = 1000, ci: float = 0.95):
+        '''Affiche les seuils qui garantissent (avec intervalle de confiance à 95%) une probabilité
+        de rupture de moins de 10% et moins de 5% pour une agence donnée'''
+
         quant_99 = self.quantiles_retraits()["quant_99"]
         minorant = quant_99 - 200000
         if minorant < 0:
@@ -565,6 +572,30 @@ class BasicStats:
         plt.show()
 
 
+    def calcul_seuils_tranquilite(self, n_iter : Optional[int] = 1000, ci: Optional[float] = 0.95):
+        '''Fonction équivalente à la précédente, mais qui permet de retourner les valeurs d'intérêt'''
+
+        quant_99 = self.quantiles_retraits()["quant_99"]
+        minorant = quant_99 - 200000
+        if minorant < 0:
+            minorant = quant_99 - 100000
+            if minorant < 0: 
+                minorant  = quant_99
+
+        liste_seuils = np.arange(minorant, quant_99 + 1000000, 50000)
+        results = []
+        for seuil in liste_seuils:
+            proba_estimee = self.calcul_proba_rupture(seuil, n_iter = n_iter, ci = ci)
+            proba_estimee["seuil"] = seuil
+            results.append(proba_estimee)
+        df_results = pd.DataFrame(results)
+        y_tranq = df_results["proba_tranq_estimee"]
+        seuil_tranq_90 = df_results[y_tranq >= 0.90]["seuil"].min()
+        seuil_tranq_95 = df_results[y_tranq >= 0.95]["seuil"].min()
+
+        return {"df_results": df_results, "seuil_90": seuil_tranq_90, "seuil_95": seuil_tranq_95}
+
+
 
 # Méthodes pour les retraits importants, susceptibles de faire tomber l'agence en rupture: 
 
@@ -635,6 +666,17 @@ class BasicStats:
         print("Fin de l'exploration")
 
 
+    def evaluate_freq_flux(self):
+        '''Il s'agit d'évaluer le comportement de l'agence: plutôt créditrice ou débitrice'''
+
+        flux_jour = self.data.groupby("jour")["flux_net"].last()
+        freq_pos = (flux_jour >= 0).sum()
+        freq_neg = (flux_jour < 0).sum()
+        return freq_pos, freq_neg
+        
+
+
+
 # Méthodes pour lancer une première analyse globale et pour construire un DataFrame nécessaire au clustering:
 
     def analyse_preliminaire_data(self):
@@ -701,6 +743,26 @@ class BasicStats:
         dict_agence["Versement_max"] = result_quant["max_versement"]
         dict_agence["proba_rupt_quant_99"] = self.calcul_proba_rupt_quant_99() # 21 features
         return dict_agence   
+    
+
+    def data_retrieval_optim(self):
+        dict_agence_optim = {}
+        dict_agence_optim["code_agence"] = self.agence
+        dict_agence_optim["nb_j_ouvrés"] = self.nb_obs_jour()["j_ouvres"]
+        dict_agence_optim["freq_pos"] = self.evaluate_freq_flux()[0]
+        dict_agence_optim["flux_net"] = self.data.groupby("jour")["flux_net"].last().to_dict()
+        dict_agence_optim["seuil_90"] = self.calcul_seuils_tranquilite()[1]
+        dict_agence_optim["seuil_95"] = self.calcul_seuils_tranquilite()[-1]
+        dict_agence_optim["info_comp_seuils"] = self.calcul_seuils_tranquilite()[0]
+        liste_possible = np.arange(0.5,0.95, 0.05)
+        dict_quantiles = {k : None for k in liste_possible}  # Permet de conserver l'indicatif du quantile
+        for possible in liste_possible:
+            dict_quantiles[possible] = self.define_quantile(possible)[0]
+        dict_agence_optim["quantiles"] = dict_quantiles
+        return dict_agence_optim
+            
+        # Manque les quantiles et les probas de tranquilité 90 - 95
+
     
     # Pb: On conserve beaucoup de features. Il faudra surement faire un tri avant de clusteriser
     # ou appliquer une méthode de réduction de dimension (type PCA...).
