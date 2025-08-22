@@ -1,12 +1,13 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
 import pandas as pd
 from typing import Optional
-import scipy.optimize as optimize
 from DataCharger_Class import DataCharger
 from BasicStats_Class import BasicStats
-from scipy import stats
+from scipy import gaussian_kde
 from skopt import gp_minimize
+from skopt import OptimizeResult
 import os
 
 # Pour le moment, on crée donc la donnée suivante, avec pour chaque agence:
@@ -25,6 +26,7 @@ import os
 # - si on passe en-dessous du quantile choisi, on compte un coût de transport et on remet au seuil
 # - si on passe en-dessous de 0, on compte un coût de rupture et on remet au seuil
 # - si on passe au-dessus de la barre du seuil économique, on évacue jusqu'à seuil min.
+
 
 class Optim_min_threshold:
 
@@ -144,7 +146,7 @@ class Optim_min_threshold:
             raise IOError(f"Erreur lors du chargement des fichiers depuis {self.filepath_optim}")
 
     
-    def choice_quantile(self, quantile: Optional[float] = 0.7):
+    def choice_quantile(self, quantile: Optional[float] = 0.8):
         '''Méthode pour choisir le quantile pour réapprovisionnement'''
 
         possible_choices = np.arange(0.5,0.95, 0.05)  # On va de la médiane au quantile 0.90
@@ -157,6 +159,8 @@ class Optim_min_threshold:
 
 
     def set_random_seed(self, seed: int):
+        '''Permet d'initialiser la graine du générateur pseudo aléatoire'''
+
         if not hasattr(self,'random_state'):
             raise AttributeError("self n'a pas d'attribut 'random_state'")
         else:
@@ -170,52 +174,242 @@ class Optim_min_threshold:
     # les agences.
 
 
-    def generate_bootstrap_scenario(self, code_agence, n_iter: Optional[int] = 100):
+    def generate_bootstrap_scenario(self, code_agence, n_iter: Optional[int] = 200):
         '''Génère un scénario de données pour l'agence spécifiée par bootstrap'''
 
-        nb_j_ouvres = self.data["code_agence"]["nb_j_ouvres"]
+        nb_j_ouvres = self.data.loc[code_agence, "nb_j_ouvres"]
         liste_flux = list(self.data["flux_net"].values())
-        liste_scenario = np.zeros((n_iter, nb_j_ouvres))
-        scenario = np.zeros(nb_j_ouvres)
-        for i in range(n_iter):
-            for j in range(nb_j_ouvres):
-                scenario[j] = np.random.choice(liste_flux)
-            liste_scenario[i] = scenario
+        rng = np.random.default_rng(self.random_state)  # Création d'un générateur pseudo-aléatoire
+        liste_scenario = rng.choice(liste_flux, size = (n_iter, nb_j_ouvres), replace = True)
         return liste_scenario
     
 
-    def simulate_system_MC(self, code_agence, seuil_min):  # On pourrait aussi compter les ruptures, les passages...
-        '''Simulation du modèle et calcul du coût pour un seuil_min donné.'''
-        liste_scenario = self.generate_bootstrap_scenario(code_agence)
-        liste_cost = []
-        cost, total_cost = 0,0
+    def generate_kde_scenario(self, code_agence : int, n_iter : Optional[int] = 100,
+                              bandwidth = None, plot = False):
+        '''Permet d'échantillonner des valeurs de flux suivant une estimation KDE de la loi empirique'''
+
+        nb_j_ouvres = self.data.loc[code_agence, "nb_j_ouvres"]
+        rng = np.random.default_rng(self.random_state)
+        flux_net = list(self.data.loc[code_agence, "flux_net"].values())
+        kde_estimate = gaussian_kde(flux_net, bw_method = bandwidth)
+        scenario_kde = np.zeros((n_iter, nb_j_ouvres))
+        for i in range(n_iter):
+            scenario_kde[i] = kde_estimate.resample(nb_j_ouvres, rng).flatten()
+        if plot:
+            sns.histplot(flux_net, bins = 50, stat = "density", color = "yellow", label = "Valeurs réelles du flux")
+            x_eval = np.linspace(min(flux_net), max(flux_net), 2000)
+            plt.plot(x_eval, kde_estimate(x_eval), color = "m", label = "Estimation KDE")
+            plt.legend()
+            plt.title(f"Estimation KDE des flux de l'agence {code_agence} en 2024")
+            plt.show()
+        return scenario_kde
+    
+    
+    def simulate_one_scenario(self, code_agence : int, scenario : np.ndarray, seuil_min : float):
+        '''Méthode pour simuler un scénario et calculer les différents coûts'''
+
         stock = seuil_min
-        freq_pos = self.data.loc[code_agence, "freq_pos"] 
-        for i in range(liste_scenario.shape[0]):
-            cost = 0
-            stock = seuil_min
-            for flux in liste_scenario[i]:
-                cost += self.t_int/100 * freq_pos * seuil_min  # On pénalise sur la valeur du seuil min (assez faiblement)
-                stock = stock + flux
-                if stock < 0:  # Rupture de l'agence en fin de journée
-                    cost += self.c_rupt # On compte un coût de rupture (correspond ici à 10 passages)
-                    stock = seuil_min  # On revient au seuil min
-                elif 0 <= stock <= self.threshold_order:  # Stock trop bas: on commande
-                    cost += self.c_trans  # On rajoute un coût de transport
-                    stock = seuil_min
-                elif stock > seuil_min + self.gap:
-                    cost += self.c_trans
-                    stock = seuil_min
-            liste_cost.append(cost)
-        total_cost = np.mean(liste_cost)  # Evaluation Monte-Carlo du coût associé au seuil seuil_min
-        return total_cost
+        passages, ruptures, decharges = 0, 0, 0
+        c_trans, c_rupt, c_opport = 0.0, 0.0, 0.0
+        freq_pos = self.data.loc[code_agence, "freq_pos"]
+        for flux in scenario:
+            c_opport += self.t_int/100 * freq_pos * seuil_min  # Pénalité sur le seuil min
+            stock += flux
+            if stock < 0:  # En cas de rupture
+                c_rupt += self.c_rupt
+                stock = seuil_min
+                ruptures += 1
+            elif 0 <= stock <= self.threshold_order:  # En cas de réapprovisionnement
+                c_trans += self.c_trans
+                stock = seuil_min
+                passages += 1
+            elif stock > seuil_min + self.gap:  # En cas d'opportunité suffisamment élevée on décharge
+                c_trans += self.c_trans
+                stock = seuil_min
+                decharges += 1
+        return [c_trans, c_rupt, c_opport, passages, ruptures, decharges]
+    
+
+    def estimate_smin_MC(self, code_agence : int, seuil_min : float, n_iter : Optional[int] = 200):
+        '''Evaluation du seuil_min par méthode Monte-Carlo (MC)'''
+
+        liste_scenario = self.generate_bootstrap_scenario(code_agence, n_iter)
+        total_c_trans, total_c_rupt, total_c_opport = 0.0, 0.0, 0.0
+        total_rupt, total_decharges, total_passages = 0, 0, 0
+        for scenario in liste_scenario:
+            liste_elements = self.simulate_one_scenario(code_agence, scenario, seuil_min)
+            total_c_trans += liste_elements[0]
+            total_c_rupt += liste_elements[1]
+            total_c_opport += liste_elements[2]
+            total_passages += liste_elements[3]
+            total_rupt += liste_elements[4]
+            total_decharges += liste_elements[-1]
+        total_cost = total_c_trans + total_c_rupt + total_c_opport
+
+        n = liste_scenario.shape[0]
+        dict_resultats = {'cost_trans': total_c_trans / n, 'cost_rupt': total_c_rupt / n,
+                          'cost_opport': total_c_opport / n,'nb_moy_passages': total_passages / n,
+                          'nb_moy_rupt': total_rupt / n, 'nb_moy_decharges': total_decharges /n,
+                          'total_cost': total_cost / n}
+        return dict_resultats
                 
 
-    def bayesian_optim_seuil(self):
-        '''Fonction pour lancer l'optimisation bayésienne du seuil min'''
+    def bayesian_optim_seuil(self, code_agence : int, n_calls = 30, 
+                             max_threshold = 2_000_000, n_scenario = 1000):
+        '''Fonction pour réaliser l'optimisation bayésienne du seuil min'''
+
+        # On commence par initialiser les valeurs d'une certaine manière:
+        withdrawals = self.data["flux_net"].values()
+        withdrawals = [w for w in withdrawals if w < 0]
+        if len(withdrawals) > 0:  # On prend de valeurs avec différents degrés de conservatisme
+            initial_points = [np.percentile(np.abs(withdrawals),50),
+                              np.percentile(np.abs(withdrawals), 75),
+                              np.percentile(np.abs(withdrawals), 90)]  
+        else:
+            initial_points = [max_threshold*0.1, max_threshold*0.3, max_threshold*0.5]
+        # Fonction objectif pour l'optimisation bayésienne:
+        def objective(params):
+            seuil = params[0]
+            result = self.estimate_smin_MC(code_agence, seuil, n_iter = n_scenario)
+            return result["total_cost"]
+        
+        resultat = gp_minimize(function = objective, 
+                               dimensions = [(self.threshold_order, max_threshold)],
+                               n_calls = n_calls,
+                               x0 = [[x] for  x in initial_points],
+                               random_state = self.random_state)
+        optimal = {"optim_smin": resultat.x[0],
+                   "optim_cost": resultat.fun,
+                   "convergence": resultat.func_vals,
+                   "evaluations": resultat.x_iters}
+        return optimal, resultat
+
+
+
+# Méthodes pour évaluer la performance de l'optimisation bayésienne et la dépendance aux paramètres du modèle :
+    
+    def plot_convergence(self, result : OptimizeResult):
+        '''Permet de tester la convergence de l'optimisation bayésienne'''
+
+        # Il faut accéder au résultat de gp_minimize de la fonction précédente
+        n_calls = len(result.func_vals)
+        func_vals = result.func_vals
+        best_so_far = np.minimum.accumulate(func_vals)
+        plt.figure(figsize = (10,6))
+        plt.plot(range(n_calls), func_vals, "o-", label = "Valeur testée")
+        plt.plot(range(n_calls), best_so_far, "r--", label = "Meilleur coût cumulé")
+        plt.xlabel("Nombre d'itérations")
+        plt.ylabel("Coût cumulé")
+        plt.title("Convergence de l'optimisation bayésienne")
+        plt.legend()
+        plt.grid(True, alpha = 0.5)
+        plt.show()
+
+
+    def explore_smin_quantile(self, code_agence : int, 
+                              quantiles = np.arange(0.5,0.95,0.05), 
+                              n_scenarios : Optional[int] = 1000):
+        '''Permet d'étudier la dépendance de s_min à la valeur retenue du quantile'''
+
+        # On stocke les différentes valeurs en fonction des quantiles
+        s_min_vals = {k : None for k in quantiles}
+        cost_vals = {k : None for k in quantiles}
+        passages_vals = {k : None for k in quantiles}
+        ruptures_vals = {k : None for k in quantiles}
+        decharges_vals = {k : None for k in quantiles}
+        for quantile in quantiles:
+            self.choice_quantile(quantile)
+            s_min = self.bayesian_optim_seuil(code_agence)["optim_smin"]
+            s_min_vals[quantile] = s_min
+            eval = self.estimate_smin_MC(code_agence, s_min)
+            cost_vals[quantile] = eval[-1]
+            passages_vals[quantile] = eval[3]
+            ruptures_vals[quantile] = eval[4]
+            decharges_vals[quantile] = eval[5]
+        # Création des plots : 
+        fig,axs = plt.subplots(2, 2, figsize = (12,8))
+        axs[0,0].plot(quantiles, s_min_vals, marker = 'o', color = 'blue')
+        axs[0,0].set_title("Seuil min en fonction du quantile de réapprovisionnement")
+        axs[0,0].set_xlabel("Quantile")
+        axs[0,0].set_ylabel("Valeur de s_min")
+
+        axs[0,1].plot(quantiles, cost_vals, marker = 'o', color = 'red')
+        axs[0,1].set_title("Coût total annuel moyen en fonction du quantile de réapprovisionnement")
+        axs[0,1].set_xlabel("Quantile")
+        axs[0,1].set_ylabel("Valeur du coût total annuel moyen")
+
+        axs[1,0].plot(quantiles, passages_vals, marker = 'o', color = 'green')
+        axs[1,0].set_title("Nombre moyen de passages par an en fonction du quantile de réapprovisionnement")
+        axs[1,0].set_xlabel("Quantile")
+        axs[1,0].set_ylabel("Moyenne du nombre de passages annuels")
+
+        axs[1,1].plot(quantiles, ruptures_vals, marker = 'o', color = 'purple')
+        axs[1,1].set_title("Nombre moyen de ruptures par an en fonction du quantile de réapprovisionnement")
+        axs[1,1].set_xlabel("Quantile")
+        axs[1,1].set_ylabel("Moyenne du nombre de ruptures annuelles")
+        plt.show()
+
+    
+    def dependency_on_seed(self, code_agence : int, n_seeds = 15, 
+                           n_calls = 30, n_scenario = 1000, 
+                           seed_master = 1234, plot = True):
+        '''Méthode pour étudier l'influence de la graine sur la valeur retournée par l'optimisation'''
+
+        rng = np.random.default_rng(seed_master)
+        seeds = rng.integer(low = 0, high = 1_000, size = n_seeds).tolist()  # Génère des seeds
+        results = []
+        init_seed = self.random_state  # On stocke la valeur initiale pour la réinitialiser à la fin
+        print("Valeur initiale de seed: ", self.random_state)
+        for seed in seeds:
+            self.set_random_seed(seed)
+            optimal, _ = self.bayesian_optim_seuil(code_agence = code_agence, n_calls = n_calls,
+                                                   n_scenario = n_scenario)
+            results.append({"seed": seed, "s_min": optimal["optim_smin"],
+                            "total_cost": optimal["optim_cost"]})
+        df_results = pd.DataFrame(results)
+        if plot:
+            fig, axs = plt.subplots(1,2, figsize = (12,5))
+            axs[0].scatter(df_results["seed"], df_results["s_min"], c = "blue", label = "Seuil optimal")
+            axs[0].set_title(f"Seuil Optimal en fonction des valeurs de graine ({seeds}) testées pour le PRNG")
+            axs[0].set_xlabel("Valeur de la graine")
+            axs[0].set_ylabel("Valeur du seuil associé")
+            axs[0].legend()
+
+            axs[1].scatter(df_results["seed"], df_results["total_cost"], c = "red", label = "Coût associé au seuil")
+            axs[1].set_title(f"Coût optimal en fonction des valeurs de graine ({seeds}) testées pour le PRNG")
+            axs[1].set_xlabel("Valeur de la graine")
+            axs[1].set_ylabel("Valeur du coût optimal associé")
+            axs[1].legend()
+            plt.show()
+        self.set_random_seed(init_seed)  # Permet de remettre la valeur initiale de la graine
+        print("Valeur finale de la graine: ", self.random_state) # Permet de débugguer au cas où
+        return df_results, seeds
+    
+
+
+# Méthodes pour charger les données, lancer l'optimisation et sauvegarder les résultats:
+
+    def optim_one_agency(self):  # Surtout à titre indicatif mais quand même
+        '''Permet de lancer l'optimisation pour une seule agence (donc d'obtenir une analyse plus fine)'''
         pass
+
+
+    def optim_all_agencies(self):
+        '''Permet de lancer l'optimisation globale pour toutes les agences et de récupérer les valeurs de seuil'''
+        pass
+
+
+
+
+
+
                 
-                
+# - Il faut rajouter une fonction pour lancer l'optimisation (en fait plusieurs)
+# - Il faut créer une méthode pour évaluer la dépendance de la solution au random seed (presque fini aussi)
+# - Il faut aussi une méthode pour estimer la loi (de manière non-paramétrique du flux_net) (en cours)
+# - Il faut une méthode qui sorte les seuils suivant le quantile voulu (presque terminé)
+# - Il faut regrouper les résultats dans un fichier CSV
+# - Enfin, il faudra créer une autre classe (type dashboard) pour résumer les analyses et les valeurs de seuils               
                 
 
 
