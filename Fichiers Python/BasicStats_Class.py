@@ -4,7 +4,7 @@ import seaborn as sns
 import numpy as np
 import pandas as pd
 # from datetime import datetime
-from typing import Optional, List
+from typing import Optional
 from DataCharger_Class import DataCharger
 
 

@@ -44,7 +44,7 @@ class Optim_min_threshold:
         # Vérification des arguments du constructeur: 
         if not all(isinstance(x, float) for x in (c_trans, c_rupt)):
             raise TypeError("Tous les coûts rentrés doivent être des flottants")
-        if not isinstance(t_int, int):
+        if not isinstance(t_int, float):
             raise TypeError("Le taux d'intérêt (annuel) doit être un entier")
         self.t_int = t_int  # Stockage du taux d'intérêt annuel (fixé par défaut à 2%)
         self.taux_journalier = (1 + self.t_int)**(1/365) - 1  # Stockage du taux d'intérêt journalier
@@ -112,7 +112,7 @@ class Optim_min_threshold:
     def save_data_optim(self, overwrite: Optional[bool] = False):
         '''Sauvegarde des données créées pour l'optimisation à l'adresse self.filepath_optim'''
 
-        if not self.new_filepath.lower().endswith('.csv'):
+        if not self.filepath_optim.lower().endswith('.csv'):
             raise ValueError("Le chemin de sauvegarde ne construit pas un fichier au format csv")
         if self.data is None:
             raise ValueError("Aucune donnée disponible pour une sauvegarde")
@@ -124,8 +124,8 @@ class Optim_min_threshold:
                 print("Le fichier existe déjà, il n'y a pas besoin de re-sauvegarder")
                 print("Si vous voulez remplacer le fichier existant, relancez la fonction avec l'argument 'overwrite' à True")
                 return
-        self.data.to_csv(self.new_filepath, index = True)
-        print(f"Données sauvegardées vers {self.new_filepath}")
+        self.data.to_csv(self.filepath_optim, index = True)
+        print(f"Données sauvegardées vers {self.filepath_optim}")
 
     
     def load_data_optim(self):
@@ -174,27 +174,40 @@ class Optim_min_threshold:
     # les agences.
 
 
-    def generate_bootstrap_scenario(self, code_agence, n_iter: Optional[int] = 200):
-        '''Génère un scénario de données pour l'agence spécifiée par bootstrap'''
+# Méthodes pour estimer de manière non-paramétrique la loi des flux nets (par KDE):
 
-        nb_j_ouvres = self.data.loc[code_agence, "nb_j_ouvres"]
-        liste_flux = list(self.data["flux_net"].values())
-        rng = np.random.default_rng(self.random_state)  # Création d'un générateur pseudo-aléatoire
-        liste_scenario = rng.choice(liste_flux, size = (n_iter, nb_j_ouvres), replace = True)
-        return liste_scenario
-    
+    def flux_kde(self, code_agence : int, factor : Optional[float] = 0.7, 
+                     method : Optional[str] = "scott"):
+        '''Méthode pour donner une estimation KDE de l'ensemble des flux'''
+
+        flux_net = list(self.data.loc[code_agence, "flux_net"].values())
+        def bandwidt(s):
+            base = s.scotts_factor() if method == "scott" else s.silverman_factor()
+            return base * factor
+        return gaussian_kde(flux_net, bw_method = bandwidt)
+
+
+    def deterministic_resample(self, kde : gaussian_kde, n : int):
+        '''Méthode pour reproduire l'échantillonnage par KDE'''
+
+        if kde is None:
+            return None
+        rng = np.random.default_rng(self.random_state)
+        return kde.resample(n, seed = rng)
+
 
     def generate_kde_scenario(self, code_agence : int, n_iter : Optional[int] = 100,
-                              bandwidth = None, plot = False):
+                              factor : Optional[int] = 0.7,
+                              method : Optional[str] = "scott", plot = False):
         '''Permet d'échantillonner des valeurs de flux suivant une estimation KDE de la loi empirique'''
 
         nb_j_ouvres = self.data.loc[code_agence, "nb_j_ouvres"]
         rng = np.random.default_rng(self.random_state)
         flux_net = list(self.data.loc[code_agence, "flux_net"].values())
-        kde_estimate = gaussian_kde(flux_net, bw_method = bandwidth)
+        kde_estimate = self.flux_kde(code_agence = code_agence, factor = factor, method = method)
         scenario_kde = np.zeros((n_iter, nb_j_ouvres))
         for i in range(n_iter):
-            scenario_kde[i] = kde_estimate.resample(nb_j_ouvres, rng).flatten()
+            scenario_kde[i] = self.deterministic_resample(kde_estimate, nb_j_ouvres).flatten()
         if plot:
             sns.histplot(flux_net, bins = 50, stat = "density", color = "yellow", label = "Valeurs réelles du flux")
             x_eval = np.linspace(min(flux_net), max(flux_net), 2000)
@@ -203,7 +216,101 @@ class Optim_min_threshold:
             plt.title(f"Estimation KDE des flux de l'agence {code_agence} en 2024")
             plt.show()
         return scenario_kde
+
+    # On passe ensuite à une estimation par signe des flux: 
+
+    def flux_kde_by_sign(self, code_agence : int, factor_pos : Optional[float] = 0.7,
+                         factor_neg : Optional[float] = 0.7,
+                         method : Optional[str] = "scott"):
+        '''Méthode pour estimer par KDE d'une part la loi des flux positifs, de l'autre celle des flux négatifs'''
+
+        flux_net = self.data.loc[code_agence, "flux_net"]
+        flux_post = list(flux_net[flux_net >= 0])
+        flux_neg = list(flux_net[flux_net < 0])  # Partition des flux en positifs et négatifs
+        proba = self.data.loc[code_agence, "freq_pos"]
+        def fit_sign(s, factor):
+            if len(s) < 2 : 
+                return None
+            def bandwidt(s):
+                base = s.scotts_factor() if method == "scott" else s.silverman_factor()
+                return base * factor
+            return gaussian_kde(s, bw_method = bandwidt)
+        return fit_sign(flux_post, factor_pos), fit_sign(flux_neg, factor_neg), proba
     
+
+    def generate_kde_bysign_scenario(self, code_agence : int, n_iter : Optional[int] = 100, 
+                                     factor_pos : Optional[float] = 0.7,
+                                     factor_neg : Optional[float] = 0.7,
+                                     method : Optional[str] = "scott"):
+        '''Méthode pour générer des scénarios après estimation kde par parties'''
+
+        nb_j_ouvres = self.data.loc[code_agence, "nb_j_ouvres"]
+        rng = np.random.default_rng(self.random_state)
+        kde_pos, kde_neg, proba = self.flux_kde_by_sign(code_agence = code_agence, factor_pos = factor_pos,
+                                                        factor_neg = factor_neg, method = method)
+        # On sépare ensuite les flux suivant le signe:
+        flux_net_pos = [v for v in self.data.loc[code_agence, "flux_net"].values() if v>= 0]
+        flux_net_neg = [v for v in self.data.loc[code_agence, "flux_net"].values() if v < 0]
+        scenario = np.zeros((n_iter, nb_j_ouvres))
+        for i in range(n_iter):
+            signs = rng.random(nb_j_ouvres) < proba  # On regarde les signes des valeurs générées
+            n_pos, n_neg = signs.sum(), (~signs).sum()  # Compte le nombre de valeurs positives et négatives
+            if n_pos:
+                if kde_pos is not None:
+                    scenario[i,signs] = self.deterministic_resample(kde_pos, n_pos).flatten() # On tire des valeurs positives de kde_pos
+                else:
+                    scenario[i,signs] = rng.choice(flux_net_pos, size = n_pos, replace = True)  # Sinon on choisit des valeurs positives directement depuis flux_net_pos
+            if n_neg:
+                if kde_neg is not None:
+                    scenario[i,~signs] = self.deterministic_resample(kde_neg, n_neg).flatten()
+                else:
+                    scenario[i,~signs] = rng.choice(flux_net_neg, size = n_neg, replace = True) # Même logique pour les valeurs négatives
+        return scenario
+
+
+    def generate_bootstrap_scenario(self, code_agence : int, n_iter: Optional[int] = 200): # Fonction pour les scénarios bootstrap
+        '''Génère un scénario de données pour l'agence spécifiée par bootstrap'''
+
+        nb_j_ouvres = self.data.loc[code_agence, "nb_j_ouvres"]
+        liste_flux = list(self.data.loc[code_agence, "flux_net"].values())
+        rng = np.random.default_rng(self.random_state)  # Création d'un générateur pseudo-aléatoire
+        liste_scenario = rng.choice(liste_flux, size = (n_iter, nb_j_ouvres), replace = True)
+        return liste_scenario
+    
+
+    def generate_scenario(self, code_agence : int, n_bootstrap : Optional[int] = 1000,
+                          n_kde : Optional[int] = 100, kde_mode : Optional[str] = "single",
+                          kde_factor : Optional[float] = 0.7, method : Optional[str] = "scott",
+                          return_labels : Optional[bool] = False):
+        '''Méthode pour combiner la génération de scénarios bootstrap et par estimation KDE.
+        Par défaut, on génère 1000 scénarios bootstrap et 100 scénarios par KDE (pour introduire de la variabilité)'''
+
+        parts, labels = [], []
+        if n_bootstrap > 0:
+            parts.append(self.generate_bootstrap_scenario(code_agence = code_agence, n_iter = n_bootstrap))
+            labels += ["bootstrap"]*n_bootstrap
+        if n_kde > 0:
+            if kde_mode == 'single':
+                kde_scenario = self.generate_kde_scenario(code_agence = code_agence, factor = kde_factor, 
+                                             method = method)
+            elif kde_mode == "signmix":
+                kde_scenario = self.generate_kde_bysign_scenario(code_agence = code_agence, 
+                                                                 factor_pos = kde_factor, factor_neg = kde_factor,
+                                                                 method = method)
+            else:
+                raise ValueError("L'argument 'kde_mode' doit valoir soit 'single' soit 'signmix'")
+            parts.append(kde_scenario)
+            labels += ["kde"]*n_kde
+        if not parts:
+            raise ValueError("n_bootstrap et n_kde ne peuvent pas être simultanément nuls")
+        scenario = np.vstack(parts)
+        if return_labels:
+            return scenario, labels
+        return scenario
+
+
+
+# Méthodes pour la simulation des scénarios et l'optimisation des seuils:
     
     def simulate_one_scenario(self, code_agence : int, scenario : np.ndarray, seuil_min : float):
         '''Méthode pour simuler un scénario et calculer les différents coûts'''
@@ -230,10 +337,15 @@ class Optim_min_threshold:
         return [c_trans, c_rupt, c_opport, passages, ruptures, decharges]
     
 
-    def estimate_smin_MC(self, code_agence : int, seuil_min : float, n_iter : Optional[int] = 200):
+    def estimate_smin_MC(self, code_agence : int, 
+                         seuil_min : float, n_bootstrap : Optional[int] = 1000,
+                         n_kde : Optional[int] = 100, kde_mode : Optional[str] = "single",
+                          kde_factor : Optional[float] = 0.7, method : Optional[str] = "scott",
+                          return_labels : Optional[bool] = False):
         '''Evaluation du seuil_min par méthode Monte-Carlo (MC)'''
 
-        liste_scenario = self.generate_bootstrap_scenario(code_agence, n_iter)
+        liste_scenario = self.generate_scenario(code_agence = code_agence, n_bootstrap = n_bootstrap, n_kde = n_kde, kde_mode = kde_mode,
+                                                kde_factor = kde_factor, method = method, return_labels = return_labels)
         total_c_trans, total_c_rupt, total_c_opport = 0.0, 0.0, 0.0
         total_rupt, total_decharges, total_passages = 0, 0, 0
         for scenario in liste_scenario:
@@ -255,11 +367,15 @@ class Optim_min_threshold:
                 
 
     def bayesian_optim_seuil(self, code_agence : int, n_calls = 30, 
-                             max_threshold = 2_000_000, n_scenario = 1000):
+                            max_threshold = 2_000_000, n_scenario = 1000,
+                            n_bootstrap : Optional[int] = 1000,
+                            n_kde : Optional[int] = 100, kde_mode : Optional[str] = "single",
+                            kde_factor : Optional[float] = 0.7, method : Optional[str] = "scott",
+                            return_labels : Optional[bool] = False): 
         '''Fonction pour réaliser l'optimisation bayésienne du seuil min'''
 
         # On commence par initialiser les valeurs d'une certaine manière:
-        withdrawals = self.data["flux_net"].values()
+        withdrawals = self.data.loc[code_agence, "flux_net"].values()
         withdrawals = [w for w in withdrawals if w < 0]
         if len(withdrawals) > 0:  # On prend de valeurs avec différents degrés de conservatisme
             initial_points = [np.percentile(np.abs(withdrawals),50),
@@ -270,7 +386,9 @@ class Optim_min_threshold:
         # Fonction objectif pour l'optimisation bayésienne:
         def objective(params):
             seuil = params[0]
-            result = self.estimate_smin_MC(code_agence, seuil, n_iter = n_scenario)
+            result = self.estimate_smin_MC(code_agence = code_agence, seuil_min = seuil, n_bootstrap = n_bootstrap, n_kde = n_kde,
+                                           kde_mode = kde_mode, kde_factor = kde_factor, method = method, 
+                                           return_labels = return_labels)
             return result["total_cost"]
         
         resultat = gp_minimize(function = objective, 
@@ -322,10 +440,10 @@ class Optim_min_threshold:
             s_min = self.bayesian_optim_seuil(code_agence)["optim_smin"]
             s_min_vals[quantile] = s_min
             eval = self.estimate_smin_MC(code_agence, s_min)
-            cost_vals[quantile] = eval[-1]
-            passages_vals[quantile] = eval[3]
-            ruptures_vals[quantile] = eval[4]
-            decharges_vals[quantile] = eval[5]
+            cost_vals[quantile] = eval["total_cost"]
+            passages_vals[quantile] = eval["nb_moy_passages"]
+            ruptures_vals[quantile] = eval["nb_moy_rupt"]
+            decharges_vals[quantile] = eval["nb_moy_decharges"]
         # Création des plots : 
         fig,axs = plt.subplots(2, 2, figsize = (12,8))
         axs[0,0].plot(quantiles, s_min_vals, marker = 'o', color = 'blue')
@@ -350,9 +468,9 @@ class Optim_min_threshold:
         plt.show()
 
     
-    def dependency_on_seed(self, code_agence : int, n_seeds = 15, 
-                           n_calls = 30, n_scenario = 1000, 
-                           seed_master = 1234, plot = True):
+    def dependency_on_seed(self, code_agence : int, n_seeds : Optional[int] = 15, 
+                           n_calls : Optional[int] = 30, n_scenario : Optional[int] = 1000, 
+                           seed_master : Optional[int ]= 1234, plot : Optional[bool] = True):
         '''Méthode pour étudier l'influence de la graine sur la valeur retournée par l'optimisation'''
 
         rng = np.random.default_rng(seed_master)
@@ -394,26 +512,49 @@ class Optim_min_threshold:
         pass
 
 
-    def optim_all_agencies(self):
+    def optim_all_agencies(self, optim_csv : str, quantiles : Optional[np.array] = np.arange(0.5,0.95,0.05),
+                           n_calls : Optional[int] = 30, n_bootstrap : Optional[int] = 1000,
+                           n_kde : Optional[int] = 100, kde_mode : Optional[str] = "single",
+                           kde_factor : Optional[float] = 0.7, method : Optional[str] = "scott",
+                           return_labels : Optional[bool] = False,
+                           plot : Optional[bool] = False):
         '''Permet de lancer l'optimisation globale pour toutes les agences et de récupérer les valeurs de seuil'''
-        pass
+        
+        dict_result_optim = {}
+        for code_agence in self.data.index:
+            dict_result_optim["code_agence"] = code_agence
+            for q in quantiles:
+                self.choice_quantile(q)
+                optimal,_ = self.bayesian_optim_seuil(code_agence = code_agence, n_calls = n_calls,
+                                                      n_bootstrap = n_bootstrap, n_kde = n_kde,
+                                                       kde_mode = kde_mode, kde_factor = kde_factor, method = method)
+                donnees_s_min = self.estimate_smin_MC(code_agence = code_agence, seuil = optimal["optim_smin"],
+                                                      n_bootstrap = n_bootstrap, n_kde = n_kde, kde_mode = kde_mode,
+                                                      kde_factor = kde_factor, method = method, return_labels = return_labels)
+                dict_result_quantile = {"optim_smin": optimal['optim_smin'], "optim_total_cost" : optimal['optim_cost'],
+                                        "cost_trans": donnees_s_min['cost_trans'], "cost_rupt": donnees_s_min['cost_rupt'],
+                                        'cost_opport': donnees_s_min['cost_opport'], "nb_moy_passages": donnees_s_min['nb_moy_passages'],
+                                        "nb_moy_ruptures": donnees_s_min['nb_moy_rupt'], "nb_moy_decharges": donnees_s_min['nb_moy_decharges']}
+                dict_result_optim[f'quantile {q}'] = dict_result_quantile
 
-
+        results_optim = pd.DataFrame(dict_result_optim)
+        results_optim.set_index("code_agence", inplace = True)
+        # Vérifications sur le chemin d'accès de la sauvegarde:
+        
 
 
 
 
                 
-# - Il faut rajouter une fonction pour lancer l'optimisation (en fait plusieurs)
-# - Il faut créer une méthode pour évaluer la dépendance de la solution au random seed (presque fini aussi)
-# - Il faut aussi une méthode pour estimer la loi (de manière non-paramétrique du flux_net) (en cours)
-# - Il faut une méthode qui sorte les seuils suivant le quantile voulu (presque terminé)
-# - Il faut regrouper les résultats dans un fichier CSV
+# - Il faut rajouter une fonction pour lancer l'optimisation (en fait plusieurs) (en cours)
+# - Il faut regrouper les résultats dans un fichier CSV (en cours aussi)
 # - Enfin, il faudra créer une autre classe (type dashboard) pour résumer les analyses et les valeurs de seuils               
-                
 
 
-
+# Il manquera le nombre de décharges dans la fonction d'évaluation en fonction des quantiles
+# Il faudrait aussi une fonction qui évalue le seuil obtenu en fonction de la valeur de la pénalité 
+# sur le seuil min (il faut qu'en ordre de grandeur il soit du même ordre que les autres coûts).
+# Enfin, on pourrait rajouter un Q-Q plot pour comparer l'estimation kde aux flux réels.
 
 
 
