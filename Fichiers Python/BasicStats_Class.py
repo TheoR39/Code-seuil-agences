@@ -588,12 +588,13 @@ class BasicStats:
             proba_estimee = self.calcul_proba_rupture(seuil, n_iter = n_iter, ci = ci)
             proba_estimee["seuil"] = seuil
             results.append(proba_estimee)
-        df_results = pd.DataFrame(results)
-        y_tranq = df_results["proba_tranq_estimee"]
-        seuil_tranq_90 = df_results[y_tranq >= 0.90]["seuil"].min()
-        seuil_tranq_95 = df_results[y_tranq >= 0.95]["seuil"].min()
+        y_tranq = [r["proba_tranq_estimee"] for r in results]
+        seuil_tranq_90 = min((r["seuil"] for r in results if r["proba_tranq_estimee"] >= 0.90),
+                             default = None)
+        seuil_tranq_95 = min((r["seuil"] for r in results if r["proba_tranq_estimee"] >= 0.95),
+                             default = None)
 
-        return {"df_results": df_results, "seuil_90": seuil_tranq_90, "seuil_95": seuil_tranq_95}
+        return {"df_results": results, "seuil_90": seuil_tranq_90, "seuil_95": seuil_tranq_95}
 
 
 
@@ -670,8 +671,8 @@ class BasicStats:
         '''Il s'agit d'évaluer le comportement de l'agence: plutôt créditrice ou débitrice'''
 
         flux_jour = self.data.groupby("jour")["flux_net"].last()
-        freq_pos = (flux_jour >= 0).sum()
-        freq_neg = (flux_jour < 0).sum()
+        freq_pos = (flux_jour >= 0).sum() / flux_jour.sum()
+        freq_neg = (flux_jour < 0).sum() / flux_jour.sum()
         return freq_pos, freq_neg
         
 
@@ -746,18 +747,19 @@ class BasicStats:
     
 
     def data_retrieval_optim(self):
+        '''Fonction pour récupérer les données contenant les données nécessaires à l'optimisation'''
+
         dict_agence_optim = {}
         dict_agence_optim["code_agence"] = self.agence
         dict_agence_optim["nb_j_ouvrés"] = self.nb_obs_jour()["j_ouvres"]
         dict_agence_optim["freq_pos"] = self.evaluate_freq_flux()[0]
         dict_agence_optim["flux_net"] = self.data.groupby("jour")["flux_net"].last().to_dict()
-        dict_agence_optim["seuil_90"] = self.calcul_seuils_tranquilite()[1]
-        dict_agence_optim["seuil_95"] = self.calcul_seuils_tranquilite()[-1]
-        dict_agence_optim["info_comp_seuils"] = self.calcul_seuils_tranquilite()[0]
-        liste_possible = np.arange(0.5,0.95, 0.05)
-        dict_quantiles = {k : None for k in liste_possible}  # Permet de conserver l'indicatif du quantile
-        for possible in liste_possible:
-            dict_quantiles[possible] = self.define_quantile(possible)[0]
+        results = self.calcul_seuils_tranquilite()
+        dict_agence_optim["seuil_90"] = results["seuil_90"]
+        dict_agence_optim["seuil_95"] = results["seuil_95"]
+        dict_agence_optim["info_comp_seuils"] = results["df_results"]
+        liste_possible = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9]
+        dict_quantiles = {k : self.define_quantile(k)["quant_retrait"] for k in liste_possible}  # Permet de conserver l'indicatif du quantile
         dict_agence_optim["quantiles"] = dict_quantiles
         return dict_agence_optim
             
