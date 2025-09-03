@@ -34,8 +34,8 @@ import json
 class Optim_min_threshold:
 
 
-    def __init__(self, filepath : str, filepath_optim : str, optim_csv : str, c_trans : float = 150.0,
-                c_rupt : float = 1500.0, t_int : float = 0.02, already_created_optim : Optional[bool] = False):
+    def __init__(self, filepath : str, filepath_optim : str, filepath_optim_one_agency : str, optim_json : str, overwrite : Optional[bool] = False, c_trans : float = 150.0,
+                c_rupt : float = 500.0, t_int : float = 0.02, already_created_optim : Optional[bool] = False):
         '''Constructeur de la classe d'optimisation du seuil min'''
 
         self.data = None  # Données pour l'optimisation
@@ -46,6 +46,7 @@ class Optim_min_threshold:
         self.already_created_optim = already_created_optim  # Savoir s'il y a besoin de créer la donnée ou non
         self.reorder_values = None  # Liste des valeurs de réapprovisionnement possibles
         self.possible_quantiles = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9]
+        self.overwrite = overwrite
         # Par défaut, on considère différents quantiles des retraits
         # Une méthode permet à l'utilisateur de changer ces valeurs à sa guise 
 
@@ -73,9 +74,12 @@ class Optim_min_threshold:
         if not filepath_optim.lower().endswith('.json'):
             raise ValueError(f"Le fichier '{filepath_optim}' n'est pas un JSON.")
         self.filepath_optim = filepath_optim
-        if not optim_csv.lower().endswith(".json"):
-            raise ValueError(f"Le fichier '{optim_csv}' n'est pas un JSON. ")
-        self.optim_csv = optim_csv
+        if not optim_json.lower().endswith(".json"):
+            raise ValueError(f"Le fichier '{optim_json}' n'est pas un JSON. ")
+        self.optim_csv = optim_json
+        if not filepath_optim_one_agency.lower().endswith('.json'):
+            raise ValueError(f"Le fichier '{filepath_optim_one_agency}' n'est pas un JSON")
+        self.filepath_optim_one_agency = filepath_optim_one_agency
 
     
     def remplissage_data_optim(self, year: Optional[int] = 2024):
@@ -204,7 +208,7 @@ class Optim_min_threshold:
         else:
             if not isinstance(seed, int):
                 raise TypeError("La graine doit obligatoirement être un entier")
-            self.random_state = seed
+            self.random_state = int(seed)
 
 
     def set_reorder_values(self, values : Union[list, np.array]):
@@ -325,7 +329,7 @@ class Optim_min_threshold:
         nb_j_ouvres = self.data[str(code_agence)]["nb_j_ouvrés"]
         flux_dict = self.data[str(code_agence)]["flux_net"]
         liste_flux = list(flux_dict.values())
-        print(f" DEBUG : Liste tronquée des flux pour l'agence {code_agence}: ", liste_flux[:10])
+        # print(f" DEBUG : Liste tronquée des flux pour l'agence {code_agence}: ", liste_flux[:10])
         rng = np.random.default_rng(self.random_state)  # Création d'un générateur pseudo-aléatoire
         liste_scenario = rng.choice(liste_flux, size = (n_iter, nb_j_ouvres), replace = True)
         return liste_scenario
@@ -372,8 +376,9 @@ class Optim_min_threshold:
         passages, ruptures, decharges = 0, 0, 0
         c_trans, c_rupt, c_opport = 0.0, 0.0, 0.0
         freq_pos = self.data[str(code_agence)]["freq_pos"]
+        # print("Valeur de fréquence positive: ", freq_pos)
+        c_opport += self.t_int * freq_pos * seuil_min  # Pénalité sur le seuil min
         for flux in scenario:
-            c_opport += 100* self.t_int * freq_pos * seuil_min  # Pénalité sur le seuil min (à investiguer...)
             stock += flux
             if stock < 0:  # En cas de rupture
                 c_rupt += self.c_rupt
@@ -401,7 +406,7 @@ class Optim_min_threshold:
                                                 kde_factor = kde_factor, method = method, return_labels = return_labels)
         total_c_trans, total_c_rupt, total_c_opport = 0.0, 0.0, 0.0
         total_rupt, total_decharges, total_passages = 0, 0, 0
-        for scenario in liste_scenario:
+        for i, scenario in enumerate(liste_scenario, start = 1):
             liste_elements = self.simulate_one_scenario(code_agence, scenario, seuil_min)
             total_c_trans += liste_elements[0]
             total_c_rupt += liste_elements[1]
@@ -409,6 +414,12 @@ class Optim_min_threshold:
             total_passages += liste_elements[3]
             total_rupt += liste_elements[4]
             total_decharges += liste_elements[-1]
+
+            modulo = (n_bootstrap + n_kde) / 5
+            if i % modulo == 0:  # message tous les 10 scénarios
+                print(f"Scénario {i}/{len(liste_scenario)} terminé")
+            if i == 5*modulo:
+                print("Nouvelle série de scénarios :")
         total_cost = total_c_trans + total_c_rupt + total_c_opport
 
         n = liste_scenario.shape[0]
@@ -426,14 +437,17 @@ class Optim_min_threshold:
                             return_labels : Optional[bool] = False): 
         '''Fonction pour réaliser l'optimisation bayésienne du seuil min'''
 
+        # On laisse les lignes de debug en commentaire au cas où
         # On commence par initialiser les valeurs d'une certaine manière:
         flux_dict = self.data[str(code_agence)]["flux_net"]
         withdrawals = list(flux_dict.values())
-        print("DEBUG : withdrawals tronqué : ", withdrawals[:10])
+        # print("DEBUG : valeurs tronquées de withdrawals : ", withdrawals[:10])
         withdrawals = [w for w in withdrawals if w < 0]
         upper_bound = float(max_threshold)
         lower_bound = float(self.threshold_order) if self.threshold_order is not None else 0.0
-        print("DEBUG : valeur de self.threshold_order :", self.threshold_order)
+        # print("DEBUG : valeur de self.threshold_order :", self.threshold_order)
+        freq_pos = self.data[str(code_agence)]["freq_pos"]
+        # print("DEBUG : valeur de fréquence positive: ", freq_pos)
 
         if len(withdrawals) > 0:
         # Calculer les percentiles
@@ -463,8 +477,8 @@ class Optim_min_threshold:
                 lower_bound + (upper_bound - lower_bound) * 0.8
             ]
     
-        print(f"DEBUG : bornes = [{lower_bound}, {upper_bound}]")
-        print(f"DEBUG : points initiaux = {initial_points}")
+        # print(f"DEBUG : bornes = [{lower_bound}, {upper_bound}]")
+        #print(f"DEBUG : points initiaux = {initial_points}")
         # Fonction objectif pour l'optimisation bayésienne:
         def objective(params):
             seuil = params[0]
@@ -472,7 +486,7 @@ class Optim_min_threshold:
                                            kde_mode = kde_mode, kde_factor = kde_factor, method = method, 
                                            return_labels = return_labels)
             return result["total_cost"]
-        print("DEBUG : valeur de self.threshold_order :", self.threshold_order)
+        # print("DEBUG : valeur de self.threshold_order :", self.threshold_order)
         resultat = gp_minimize(objective, 
                                dimensions = [(lower_bound, upper_bound)],
                                n_calls = n_calls,
@@ -488,19 +502,19 @@ class Optim_min_threshold:
 
 # Méthodes pour évaluer la performance de l'optimisation bayésienne et la dépendance aux paramètres du modèle :
     
-    def plot_convergence(self, result : OptimizeResult):
-        '''Permet de tester la convergence de l'optimisation bayésienne'''
+    def plot_convergence(self, value : float, result : OptimizeResult):
+        '''Permet de tester la convergence de l'optimisation bayésienne (à graine donnée)'''
 
         # Il faut accéder au résultat de gp_minimize de la fonction précédente
         n_calls = len(result.func_vals)
         func_vals = result.func_vals
         best_so_far = np.minimum.accumulate(func_vals)
         plt.figure(figsize = (10,6))
-        plt.plot(range(n_calls), func_vals, "o-", label = "Valeur testée")
-        plt.plot(range(n_calls), best_so_far, "r--", label = "Meilleur coût cumulé")
+        plt.plot(range(n_calls), func_vals, "o-", label = "Coût à la valeur courante d'itération")
+        plt.plot(range(n_calls), best_so_far, "r--", label = "Meilleur coût (suivant les valeurs testées)")
         plt.xlabel("Nombre d'itérations")
-        plt.ylabel("Coût cumulé")
-        plt.title("Convergence de l'optimisation bayésienne")
+        plt.ylabel("Coût à l'itération donnée")
+        plt.title(f"Convergence de l'optimisation bayésienne (pour quantile = {value})")
         plt.legend()
         plt.grid(True, alpha = 0.5)
         plt.show()
@@ -516,6 +530,7 @@ class Optim_min_threshold:
         passages_vals = {k : None for k in self.possible_quantiles}
         ruptures_vals = {k : None for k in self.possible_quantiles}
         decharges_vals = {k : None for k in self.possible_quantiles}
+        results = {}
         for quantile in self.possible_quantiles:
             self.choice_reorder_value(code_agence = code_agence, value = quantile)
             s_min = self.bayesian_optim_seuil(code_agence = code_agence, n_bootstrap = n_bootstrap, n_kde = n_kde)[0]["optim_smin"]
@@ -525,6 +540,13 @@ class Optim_min_threshold:
             passages_vals[quantile] = eval["nb_moy_passages"]
             ruptures_vals[quantile] = eval["nb_moy_rupt"]
             decharges_vals[quantile] = eval["nb_moy_decharges"]
+            results[str(quantile)] = {
+                "s_min": float(s_min),
+                "total_cost": float(eval["total_cost"]),
+                "nb_moy_passages": float(eval["nb_moy_passages"]),
+                "nb_moy_rupt": float(eval["nb_moy_rupt"]),
+                "nb_moy_decharges": float(eval["nb_moy_decharges"])
+            }
 
         x_vals = list(self.possible_quantiles)
         s_min_list = [s_min_vals[q] for q in x_vals]
@@ -535,25 +557,26 @@ class Optim_min_threshold:
         # Création des plots : 
         fig,axs = plt.subplots(2, 2, figsize = (12,8))
         axs[0,0].plot(x_vals, s_min_list, marker = 'o', color = 'blue')
-        axs[0,0].set_title("Seuil min en fonction du quantile de réapprovisionnement")
+        axs[0,0].set_title("Seuil min vs quantile")
         axs[0,0].set_xlabel("Quantile")
         axs[0,0].set_ylabel("Valeur de s_min")
 
         axs[0,1].plot(x_vals, cost_list, marker = 'o', color = 'red')
-        axs[0,1].set_title("Coût total annuel moyen en fonction du quantile de réapprovisionnement")
+        axs[0,1].set_title("Coût total annuel moyen vs quantile")
         axs[0,1].set_xlabel("Quantile")
         axs[0,1].set_ylabel("Valeur du coût total annuel moyen")
 
         axs[1,0].plot(x_vals, passages_list, marker = 'o', color = 'green')
-        axs[1,0].set_title("Nombre moyen de passages par an en fonction du quantile de réapprovisionnement")
+        axs[1,0].set_title("Nombre moyen de passages annuel vs quantile")
         axs[1,0].set_xlabel("Quantile")
         axs[1,0].set_ylabel("Moyenne du nombre de passages annuels")
 
         axs[1,1].plot(x_vals, ruptures_list, marker = 'o', color = 'purple')
-        axs[1,1].set_title("Nombre moyen de ruptures par an en fonction du quantile de réapprovisionnement")
+        axs[1,1].set_title("Nombre moyen de ruptures annuelles vs quantile")
         axs[1,1].set_xlabel("Quantile")
         axs[1,1].set_ylabel("Moyenne du nombre de ruptures annuelles")
         plt.show()
+        return results
 
     
     def dependency_on_seed(self, code_agence : int, quantile : int, n_seeds : Optional[int] = 15, 
@@ -563,12 +586,12 @@ class Optim_min_threshold:
 
         self.choice_reorder_value(code_agence = code_agence, value = quantile)
         rng = np.random.default_rng(seed_master)
-        seeds = rng.integer(low = 0, high = 1_000, size = n_seeds).tolist()  # Génère des seeds
+        seeds = rng.integers(low = 0, high = 1_000, size = n_seeds).tolist()  # Génère des seeds
         results = []
-        init_seed = self.random_state  # On stocke la valeur initiale pour la réinitialiser à la fin
+        init_seed = self.random_state if self.random_state is not None else 1234 # On stocke la valeur initiale pour la réinitialiser à la fin
         print("Valeur initiale de seed: ", self.random_state)
         for seed in seeds:
-            self.set_random_seed(seed)
+            self.set_random_seed(int(seed))
             optimal, _ = self.bayesian_optim_seuil(code_agence = code_agence, n_calls = n_calls,
                                                    n_bootstrap = n_bootstrap, n_kde = n_kde)
             results.append({"seed": seed, "s_min": optimal["optim_smin"],
@@ -577,18 +600,18 @@ class Optim_min_threshold:
         if plot:
             fig, axs = plt.subplots(1,2, figsize = (12,5))
             axs[0].scatter(df_results["seed"], df_results["s_min"], c = "blue", label = "Seuil optimal")
-            axs[0].set_title(f"Seuil Optimal en fonction des valeurs de graine ({seeds}) testées pour le PRNG")
+            axs[0].set_title(f"Seuil Optimal en fonction des valeurs de graine testées pour le PRNG (à quantile {quantile})")
             axs[0].set_xlabel("Valeur de la graine")
             axs[0].set_ylabel("Valeur du seuil associé")
             axs[0].legend()
 
             axs[1].scatter(df_results["seed"], df_results["total_cost"], c = "red", label = "Coût associé au seuil")
-            axs[1].set_title(f"Coût optimal en fonction des valeurs de graine ({seeds}) testées pour le PRNG")
+            axs[1].set_title(f"Coût optimal en fonction des valeurs de graine testées pour le PRNG (à quantile {quantile})")
             axs[1].set_xlabel("Valeur de la graine")
             axs[1].set_ylabel("Valeur du coût optimal associé")
             axs[1].legend()
             plt.show()
-        self.set_random_seed(init_seed)  # Permet de remettre la valeur initiale de la graine
+        self.set_random_seed(int(init_seed))  # Permet de remettre la valeur initiale de la graine
         print("Valeur finale de la graine: ", self.random_state)  # Permet de débugguer au cas où
         return df_results, seeds
     
@@ -596,7 +619,7 @@ class Optim_min_threshold:
 
 # Méthodes pour charger les données, lancer l'optimisation et sauvegarder les résultats:
 
-    def optim_one_agency(self, code_agence : int, n_calls : Optional[int] = 30, n_bootstrap : Optional[int] = 1000,
+    def optim_one_agency(self, code_agence : int, n_calls : Optional[int] = 40, n_bootstrap : Optional[int] = 1000,
                          n_kde : Optional[int] = 100, kde_mode : Optional[str] = "single",
                          kde_factor : Optional[float] = 0.7, method : Optional[str] = "scott",
                          return_labels : Optional[bool] = False): 
@@ -604,17 +627,29 @@ class Optim_min_threshold:
         
         if not self.already_created_optim:
             self.remplissage_data_optim()
-            self.save_data_optim()
+            self.save_data_optim(overwrite = self.overwrite)
         self.load_data_optim()
-        self.explore_smin_quantile(code_agence = code_agence,
+        results = self.explore_smin_quantile(code_agence = code_agence,
                                    n_bootstrap = n_bootstrap, n_kde = n_kde)
         for q in self.possible_quantiles:
             self.choice_reorder_value(code_agence = code_agence, value = q)
             _ , result = self.bayesian_optim_seuil(code_agence = code_agence, n_calls = n_calls,
                                                       n_bootstrap = n_bootstrap, n_kde = n_kde,
                                                        kde_mode = kde_mode, kde_factor = kde_factor, method = method)
-            self.dependency_on_seed(code_agence = code_agence, quantile = q, n_bootstrap = n_bootstrap, n_kde = n_kde)
-            self.plot_convergence(result)
+            # self.dependency_on_seed(code_agence = code_agence, quantile = q, n_bootstrap = n_bootstrap, n_kde = n_kde)
+            self.plot_convergence(value = q, result = result)
+        filepath = self.filepath_optim_one_agency
+        all_results = {}
+        if os.path.exists(filepath):
+            with open(filepath, "r", encoding="utf-8") as f:
+                try:
+                    all_results = json.load(f)
+                except json.JSONDecodeError:
+                    all_results = {}  # au cas où le fichier est corrompu ou vide
+        all_results[str(code_agence)] = results
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(all_results, f, indent=4, ensure_ascii=False)
+
 
 
     def optim_all_agencies(self, n_calls : Optional[int] = 30, n_bootstrap : Optional[int] = 1000,
@@ -682,7 +717,6 @@ class Optim_min_threshold:
 # sur le seuil min (il faut qu'en ordre de grandeur il soit du même ordre que les autres coûts).
 # Enfin, on pourrait rajouter un Q-Q plot pour comparer l'estimation kde aux flux réels.
 
-# On pourrait rajouter une fonction qui montre comment varie la valeur de seuil en fonction de la valeur de la pénalité
 
 
 

@@ -671,8 +671,9 @@ class BasicStats:
         '''Il s'agit d'évaluer le comportement de l'agence: plutôt créditrice ou débitrice'''
 
         flux_jour = self.data.groupby("jour")["flux_net"].last()
-        freq_pos = (flux_jour >= 0).sum() / flux_jour.sum()
-        freq_neg = (flux_jour < 0).sum() / flux_jour.sum()
+        n_days = len(flux_jour)
+        freq_pos = (flux_jour >= 0).sum() / n_days
+        freq_neg = (flux_jour < 0).sum() / n_days
         return freq_pos, freq_neg
         
 
